@@ -15,19 +15,19 @@ function getIntroText() {
 function getZipCodesFromSheet() {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = ss.getSheetByName('Form Responses 1');
-    
+    const sheet = ss.getSheetByName('Form Responses (Clean)');
+
     if (!sheet) {
-      throw new Error('Sheet "Form Responses 1" not found');
+      throw new Error('Sheet "Form Responses (Clean)" not found');
     }
-    
+
     const lastRow = sheet.getLastRow();
-    
+
     if (lastRow < 2) {
       return {};
     }
-    
-    const zipRange = sheet.getRange(2, 5, lastRow - 1, 1);
+
+    const zipRange = sheet.getRange(2, 6, lastRow - 1, 1);
     const zipValues = zipRange.getValues();
     
     // Count occurrences of each zip code
@@ -90,7 +90,7 @@ function getAllZipData() {
   const zipCounts = getZipCodesFromSheet();
   
   if (Object.keys(zipCounts).length === 0) {
-    return { error: 'No zip codes found in Column E' };
+    return { error: 'No zip codes found in Column F (Current 5 Digit Zip Code)' };
   }
   
   const targetCount = zipCounts['64110'] || 0;
