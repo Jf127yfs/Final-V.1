@@ -1,0 +1,330 @@
+/**
+ * ============================================================================
+ * CHECK-IN SYSTEM FOR FORM RESPONSES (CLEAN)
+ * ============================================================================
+ * 
+ * Column Reference (Form Responses Clean):
+ * Column 2 (B) - Birthday (MM/DD) [index 1]
+ * Column 6 (F) - ZIP Code [index 5]
+ * Column 8 (H) - Gender [index 7]
+ * Column 25 (Y) - Screen Name [index 24]
+ * Column 26 (Z) - UID [index 25]
+ * Column 27 (AA) - DDD_Score [index 26]
+ * Column 28 (AB) - Checked-In [index 27]
+ * Column 29 (AC) - Check-in Time [index 28]
+ * Column 30 (AD) - PHOTO_URL_COL [index 29]
+ */
+
+/**
+ * checkInGuestByInfo - Check in guest using ZIP, Gender, and Birthday
+ */
+function checkInGuestByInfo(params) {
+  Logger.log('=== CHECK-IN STARTED ===');
+  Logger.log('Input params: ' + JSON.stringify(params));
+  
+  const zipCode = String(params.zipCode || '').trim();
+  const gender = String(params.gender || '').trim();
+  const birthday = String(params.birthday || '').trim();
+  
+  if (!zipCode || !gender || !birthday) {
+    return {ok: false, message: 'Missing required fields'};
+  }
+  
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const cleanSheet = ss.getSheetByName('Form Responses (Clean)');
+  
+  if (!cleanSheet) {
+    Logger.log('ERROR: Sheet not found');
+    return {ok: false, message: 'Form Responses (Clean) not found'};
+  }
+  
+  const data = cleanSheet.getDataRange().getValues();
+  Logger.log(`Total rows in sheet: ${data.length}`);
+  
+  // Normalize birthday
+  const normalizedBirthday = birthday.split('/').slice(0, 2).join('/');
+  Logger.log(`Searching for: ZIP="${zipCode}", Gender="${gender}", Birthday="${normalizedBirthday}"`);
+  
+  // Search for matching guest
+  for (let i = 1; i < data.length; i++) {
+    const rowBirthday = String(data[i][1] || '').trim(); // Column B (index 1)
+    const rowZip = String(data[i][5] || '').trim(); // Column F (index 5)
+    const rowGender = String(data[i][7] || '').trim(); // Column H (index 7)
+    const rowScreenName = String(data[i][24] || '').trim(); // Column Y (index 24)
+    const rowUID = String(data[i][25] || '').trim(); // Column Z (index 25)
+    
+    // Normalize row birthday
+    const normalizedRowBirthday = rowBirthday.split('/').slice(0, 2).join('/');
+    
+    // Check for match
+    if (rowZip === zipCode && 
+        rowGender.toLowerCase() === gender.toLowerCase() && 
+        normalizedRowBirthday === normalizedBirthday) {
+      
+      Logger.log(`✓ MATCH FOUND at row ${i+1}!`);
+      Logger.log(`- Screen Name: ${rowScreenName}`);
+      Logger.log(`- UID: ${rowUID}`);
+      
+      // Check if already checked in
+      const alreadyCheckedIn = String(data[i][27] || '').trim(); // Column AB (index 27)
+      Logger.log(`- Current check-in status (Column AB): "${alreadyCheckedIn}"`);
+      
+      if (alreadyCheckedIn === 'Y' || alreadyCheckedIn === 'Yes') {
+        const existingTime = data[i][28]; // Column AC (index 28)
+        Logger.log(`- Already checked in at: ${existingTime}`);
+        return {
+          ok: true,
+          message: 'Already checked in',
+          guest: {
+            screenName: rowScreenName,
+            uid: rowUID,
+            checkedIn: true,
+            checkInTime: existingTime,
+            photoUrl: data[i][29] || ''
+          }
+        };
+      }
+      
+      // Perform check-in
+      const checkInTime = new Date();
+      const targetRow = i + 1; // Convert to 1-indexed row number
+      
+      Logger.log(`--- WRITING CHECK-IN DATA ---`);
+      Logger.log(`Target row (1-indexed): ${targetRow}`);
+      
+      try {
+        // Write "Y" to Column AB (28)
+        const checkInCell = cleanSheet.getRange(targetRow, 28);
+        Logger.log(`Writing "Y" to: ${checkInCell.getA1Notation()}`);
+        checkInCell.setValue('Y');
+        
+        // Write timestamp to Column AC (29)
+        const timeCell = cleanSheet.getRange(targetRow, 29);
+        Logger.log(`Writing timestamp to: ${timeCell.getA1Notation()}`);
+        timeCell.setValue(checkInTime);
+        
+        // Force immediate write
+        SpreadsheetApp.flush();
+        Logger.log('SpreadsheetApp.flush() executed');
+        
+        // Verify the write
+        const verifyCheckIn = cleanSheet.getRange(targetRow, 28).getValue();
+        const verifyTime = cleanSheet.getRange(targetRow, 29).getValue();
+        Logger.log(`VERIFICATION - Column AB value: "${verifyCheckIn}"`);
+        Logger.log(`VERIFICATION - Column AC value: "${verifyTime}"`);
+        
+        if (verifyCheckIn !== 'Y') {
+          Logger.log('⚠️ WARNING: Check-in value not persisted!');
+        }
+        
+        return {
+          ok: true,
+          message: 'Check-in successful',
+          guest: {
+            screenName: rowScreenName,
+            uid: rowUID,
+            checkedIn: true,
+            checkInTime: checkInTime.toLocaleString(),
+            photoUrl: data[i][29] || ''
+          }
+        };
+        
+      } catch (error) {
+        Logger.log(`❌ ERROR during check-in: ${error.toString()}`);
+        Logger.log(`Error stack: ${error.stack}`);
+        return {ok: false, message: 'Check-in failed: ' + error.message};
+      }
+    }
+  }
+  
+  Logger.log('❌ No matching guest found');
+  return {ok: false, message: 'Guest not found. Please verify your information.'};
+}
+
+/**
+ * updateScreenName - Update a guest's screen name
+ */
+function updateScreenName(params) {
+  Logger.log('=== UPDATE SCREEN NAME STARTED ===');
+  Logger.log('Input params: ' + JSON.stringify(params));
+  
+  const uid = String(params.uid || '').trim();
+  const newScreenName = String(params.newScreenName || '').trim();
+  
+  if (!uid || !newScreenName) {
+    return {ok: false, message: 'UID and new screen name are required'};
+  }
+  
+  if (newScreenName.length < 3 || newScreenName.length > 50) {
+    return {ok: false, message: 'Screen name must be 3-50 characters'};
+  }
+  
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const cleanSheet = ss.getSheetByName('Form Responses (Clean)');
+  
+  if (!cleanSheet) {
+    return {ok: false, message: 'Form Responses (Clean) not found'};
+  }
+  
+  const data = cleanSheet.getDataRange().getValues();
+  
+  // Find guest by UID in Column Z (index 25)
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][25] || '').trim() === uid) {
+      const targetRow = i + 1;
+      Logger.log(`Found guest at row ${targetRow}`);
+      
+      try {
+        // Update Column Y (25)
+        const nameCell = cleanSheet.getRange(targetRow, 25);
+        Logger.log(`Writing "${newScreenName}" to: ${nameCell.getA1Notation()}`);
+        nameCell.setValue(newScreenName);
+        SpreadsheetApp.flush();
+        
+        // Verify
+        const verifyName = cleanSheet.getRange(targetRow, 25).getValue();
+        Logger.log(`VERIFICATION - Column Y value: "${verifyName}"`);
+        
+        return {
+          ok: true,
+          message: 'Screen name updated successfully',
+          screenName: newScreenName
+        };
+        
+      } catch (error) {
+        Logger.log(`❌ ERROR: ${error.toString()}`);
+        return {ok: false, message: 'Update failed: ' + error.message};
+      }
+    }
+  }
+  
+  return {ok: false, message: 'Guest not found'};
+}
+
+/**
+ * uploadGuestPhotoToClean - Upload photo and update Column AD
+ */
+function uploadGuestPhotoToClean(params) {
+  Logger.log('=== PHOTO UPLOAD STARTED ===');
+  
+  const {uid, fileName, mimeType, base64Data} = params;
+  
+  if (!uid || !fileName || !mimeType || !base64Data) {
+    return {ok: false, message: 'Missing required parameters'};
+  }
+  
+  if (!mimeType.startsWith('image/')) {
+    return {ok: false, message: 'Only image files allowed'};
+  }
+  
+  try {
+    // Get Guest Photos folder
+    const folderId = '1ZcP5jpYsYy0xuGqlFYNrDgG4K40eEKJB';
+    let folder;
+    
+    try {
+      folder = DriveApp.getFolderById(folderId);
+      Logger.log('Found Guest Photos folder');
+    } catch (e) {
+      const folders = DriveApp.getFoldersByName('Guest Photos');
+      folder = folders.hasNext() ? folders.next() : DriveApp.createFolder('Guest Photos');
+    }
+    
+    const uniqueFileName = `${uid}_${fileName}`;
+    
+    // Delete old photo
+    const existingFiles = folder.getFilesByName(uniqueFileName);
+    while (existingFiles.hasNext()) {
+      existingFiles.next().setTrashed(true);
+    }
+    
+    // Upload new photo
+    const decodedData = Utilities.base64Decode(base64Data);
+    const blob = Utilities.newBlob(decodedData, mimeType, uniqueFileName);
+    const file = folder.createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    const fileUrl = file.getUrl();
+    
+    Logger.log(`Photo uploaded: ${fileUrl}`);
+    
+    // Update Form Responses (Clean)
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const cleanSheet = ss.getSheetByName('Form Responses (Clean)');
+    
+    if (!cleanSheet) {
+      Logger.log('⚠️ WARNING: Sheet not found');
+      return {ok: true, message: 'Photo uploaded but sheet not updated', fileUrl: fileUrl};
+    }
+    
+    const data = cleanSheet.getDataRange().getValues();
+    
+    // Find guest by UID in Column Z (index 25)
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][25] || '').trim() === uid) {
+        const targetRow = i + 1;
+        Logger.log(`Found guest at row ${targetRow}`);
+        
+        try {
+          // Write to Column AD (30)
+          const photoCell = cleanSheet.getRange(targetRow, 30);
+          Logger.log(`Writing photo URL to: ${photoCell.getA1Notation()}`);
+          photoCell.setValue(fileUrl);
+          SpreadsheetApp.flush();
+          
+          // Verify
+          const verifyUrl = cleanSheet.getRange(targetRow, 30).getValue();
+          Logger.log(`VERIFICATION - Column AD value: "${verifyUrl}"`);
+          
+          return {ok: true, message: 'Photo uploaded successfully', fileUrl: fileUrl};
+          
+        } catch (error) {
+          Logger.log(`❌ ERROR updating sheet: ${error.toString()}`);
+        }
+      }
+    }
+    
+    Logger.log('⚠️ Guest not found in sheet');
+    return {ok: true, message: 'Photo uploaded but guest not found in sheet', fileUrl: fileUrl};
+    
+  } catch (error) {
+    Logger.log(`❌ ERROR: ${error.toString()}`);
+    return {ok: false, message: 'Upload failed: ' + error.message};
+  }
+}
+
+/**
+ * getGuestInfo - Get guest information by UID
+ */
+function getGuestInfo(uid) {
+  if (!uid) {
+    return {ok: false, message: 'UID is required'};
+  }
+  
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const cleanSheet = ss.getSheetByName('Form Responses (Clean)');
+  
+  if (!cleanSheet) {
+    return {ok: false, message: 'Form Responses (Clean) not found'};
+  }
+  
+  const data = cleanSheet.getDataRange().getValues();
+  
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][25] || '').trim() === String(uid).trim()) {
+      const checkedIn = String(data[i][27] || '').trim();
+      
+      return {
+        ok: true,
+        guest: {
+          screenName: data[i][24],
+          uid: data[i][25],
+          checkedIn: checkedIn === 'Y' || checkedIn === 'Yes',
+          checkInTime: data[i][28] || null,
+          photoUrl: data[i][29] || null
+        }
+      };
+    }
+  }
+  
+  return {ok: false, message: 'Guest not found'};
+}
