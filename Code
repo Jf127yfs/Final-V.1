@@ -105,12 +105,18 @@ function doGet(e) {
           .evaluate()
           .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
       
-      case 'map': 
+      case 'map':
         // Geographic map - visualizes guest locations by ZIP code
         return HtmlService.createTemplateFromFile('map')
           .evaluate()
           .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
-      
+
+      case 'md':
+        // MapDisplay - Terminal-style ZIP code network visualization
+        return HtmlService.createTemplateFromFile('MapDisplay')
+          .evaluate()
+          .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+
       case 'msa': 
         // MSA Analysis - placeholder for metropolitan statistical area analysis
         return createPlaceholderPage('msa', 'MSA Analysis'); 
