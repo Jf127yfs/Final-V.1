@@ -1,0 +1,692 @@
+/**
+ * DataClean.gs - Form Response Data Normalization & DDD Detection
+ * 
+ * PURPOSE:
+ * Creates "Form Responses (Clean)" master sheet with:
+ * - Normalized birthday formats (MM/DD)
+ * - Standardized values per data dictionary
+ * - Separate interest columns for easier analysis
+ * - Empty fields replaced with (N/A)
+ * - DDD Score for each guest
+ * - Check-in tracking columns (empty, for future use)
+ * 
+ * Also creates "DDD" sheet with:
+ * - All violation flags per guest
+ * - DDD Score and Penalties
+ * - Detailed violation descriptions
+ * 
+ * TO USE:
+ * 1. Ensure "Form Responses 1" sheet exists with raw data
+ * 2. Go to Extensions > Apps Script
+ * 3. Run cleanFormResponses() function
+ */
+
+function cleanFormResponses() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sourceSheet = ss.getSheetByName('Form Responses 1');
+  
+  // Validation check
+  if (!sourceSheet) {
+    SpreadsheetApp.getUi().alert(
+      'Error: "Form Responses 1" sheet not found!\n\n' +
+      'Please ensure your source data sheet exists.'
+    );
+    return;
+  }
+  
+  // Get source data
+  const sourceData = sourceSheet.getDataRange().getValues();
+  const sourceHeaders = sourceData[0];
+  const sourceRows = sourceData.slice(1);
+  
+  // Create clean headers with separate interest columns
+  const cleanHeaders = [
+    'Timestamp',
+    'Birthday (MM/DD)',
+    'Zodiac Sign',
+    'Age Range',
+    'Education Level',
+    'Current 5 Digit Zip Code',
+    'Self Identified Ethnicity',
+    'Self-Identified Gender',
+    'Self-Identified Sexual Orientation',
+    'Employment Information (Industry)',
+    'Employment Information (Role)',
+    'Do you know the Host(s)?',
+    'Which host have you known the longest?',
+    'If yes, how well do you know them?',
+    'Your General Interests (Choose 3)',
+    'Interest_1',
+    'Interest_2',
+    'Interest_3',
+    'Music Preference',
+    'Current Favorite Artist',
+    'Name one song you want to hear at the party',
+    'Recent purchase you\'re most happy about',
+    'At your worst you are...',
+    'Which best describes your general social stance?',
+    'Screen Name',
+    'UID',
+    'DDD_Score',
+    'Checked-In',
+    'Check-in Time',
+    'PHOTO_URL_COL'
+  ];
+  
+  // Column mapping for source sheet (0-indexed)
+  const SRC_COL = {
+    TIMESTAMP: 0,
+    BIRTHDAY: 1,
+    AGE_RANGE: 2,
+    EDUCATION: 3,
+    ZIP: 4,
+    ETHNICITY: 5,
+    GENDER: 6,
+    ORIENTATION: 7,
+    INDUSTRY: 8,
+    ROLE: 9,
+    KNOW_HOST: 10,
+    WHICH_HOST: 11,
+    HOW_WELL: 12,
+    INTERESTS: 13,
+    MUSIC: 14,
+    ARTIST: 15,
+    SONG: 16,
+    PURCHASE: 17,
+    WORST_TRAIT: 18,
+    SOCIAL_STANCE: 19,
+    ZODIAC: 20,
+    SCREEN_NAME: 21,
+    UID: 22
+  };
+  
+  // Initialize DDD tracking
+  const dddLog = [];
+  const cleanRows = [];
+  
+  // Process each row
+  sourceRows.forEach((row, idx) => {
+    const rowNum = idx + 2; // Account for header
+    const violations = [];
+    let dddScore = 0;
+    
+    // Get screen name and UID for tracking
+    const screenName = String(row[SRC_COL.SCREEN_NAME] || '').trim() || '(N/A)';
+    const uid = String(row[SRC_COL.UID] || '').trim() || '(N/A)';
+    
+    // 1. TIMESTAMP - Keep as-is
+    const timestamp = row[SRC_COL.TIMESTAMP];
+    
+    // 2. BIRTHDAY - Normalize to MM/DD format
+    const birthdayResult = normalizeBirthday(row[SRC_COL.BIRTHDAY]);
+    const birthday = birthdayResult.normalized;
+    if (birthdayResult.violation) {
+      dddScore += 1;
+      violations.push({
+        type: 'DDD - Birthday Format',
+        description: `Invalid birthday format: "${row[SRC_COL.BIRTHDAY]}"`
+      });
+    }
+    
+    // 3. ZODIAC - Copy from Form Responses 1
+    const zodiac = String(row[SRC_COL.ZODIAC] || '').trim() || '(N/A)';
+    
+    // 4. AGE RANGE - Keep as-is or (N/A)
+    const ageRange = normalizeField(row[SRC_COL.AGE_RANGE]);
+    
+    // 5. EDUCATION LEVEL - Keep as-is or (N/A)
+    const education = normalizeField(row[SRC_COL.EDUCATION]);
+    
+    // 6. ZIP CODE - Keep as-is
+    const zip = String(row[SRC_COL.ZIP] || '').trim() || '(N/A)';
+    
+    // 7. ETHNICITY - Standardize per data dictionary
+    const ethnicity = normalizeEthnicity(row[SRC_COL.ETHNICITY]);
+    
+    // 8. GENDER - Standardize per data dictionary
+    const gender = normalizeGender(row[SRC_COL.GENDER]);
+    
+    // 9. ORIENTATION - Keep as-is or (N/A)
+    const orientation = normalizeField(row[SRC_COL.ORIENTATION]);
+    
+    // 10. INDUSTRY - Keep as-is or (N/A)
+    const industry = normalizeField(row[SRC_COL.INDUSTRY]);
+    
+    // 11. ROLE - Keep as-is or (N/A)
+    const role = normalizeField(row[SRC_COL.ROLE]);
+    
+    // 12-13. KNOW HOST & WHICH HOST - Check for contradictions and flag unknowns
+    const knowHostRaw = String(row[SRC_COL.KNOW_HOST] || '').trim();
+    const whichHostRaw = String(row[SRC_COL.WHICH_HOST] || '').trim();
+    
+    const knowHost = knowHostRaw || '(N/A)';
+    const whichHost = whichHostRaw || '(N/A)';
+    
+    // Check for "Do Not Know Them" response
+    if (whichHost.toLowerCase().includes('do not know')) {
+      dddScore += 5;
+      violations.push({
+        type: 'DDD - Do Not Know Them',
+        description: 'Unknown Guest Detected - Listed "Do Not Know Them"'
+      });
+    }
+    
+    // Check for contradiction: Says "No" to knowing hosts but then lists a host name
+    if (knowHost.toLowerCase() === 'no' && 
+        whichHost !== '(N/A)' && 
+        !whichHost.toLowerCase().includes('do not know') &&
+        (whichHost.toLowerCase().includes('jacob') || 
+         whichHost.toLowerCase().includes('michael') || 
+         whichHost.toLowerCase().includes('equal'))) {
+      dddScore += 3;
+      violations.push({
+        type: 'DDD - Contradiction: Know Host',
+        description: `Says "No" to knowing hosts but lists "${whichHost}"`
+      });
+    }
+    
+    // 14. HOW WELL - Keep as-is
+    const howWell = row[SRC_COL.HOW_WELL] || '(N/A)';
+    
+    // 15-18. INTERESTS - Split into separate columns and check for violations
+    const interestsResult = normalizeInterests(row[SRC_COL.INTERESTS]);
+    const interestsOriginal = interestsResult.original;
+    const interest1 = interestsResult.interest1;
+    const interest2 = interestsResult.interest2;
+    const interest3 = interestsResult.interest3;
+    if (interestsResult.violation) {
+      dddScore += 2;
+      violations.push({
+        type: 'DDD - More Than 3 Interests',
+        description: `Listed ${interestsResult.count} interests (max 3 allowed)`
+      });
+    }
+    
+    // 19. MUSIC PREFERENCE - Check for non-standard entries
+    const musicResult = normalizeMusicPreference(row[SRC_COL.MUSIC]);
+    const musicPref = musicResult.normalized;
+    if (musicResult.violation) {
+      dddScore += 1;
+      violations.push({
+        type: 'DDD - Music Preference Non-Standard',
+        description: `Non-standard music preference: "${row[SRC_COL.MUSIC]}"`
+      });
+    }
+    
+    // 20. ARTIST - Keep as-is or (N/A)
+    const artist = normalizeField(row[SRC_COL.ARTIST]);
+    
+    // 21. SONG - Keep as-is or (N/A)
+    const song = normalizeField(row[SRC_COL.SONG]);
+    if (song === '(N/A)' || song.toLowerCase() === 'none' || song.toLowerCase() === 'n/a') {
+      dddScore += 1;
+      violations.push({
+        type: 'DDD - No Song Request',
+        description: 'Did not provide a song request'
+      });
+    }
+    
+    // 22. RECENT PURCHASE - Keep as-is or (N/A)
+    const purchase = normalizeField(row[SRC_COL.PURCHASE]);
+    
+    // 23. WORST TRAIT - Keep as-is or (N/A)
+    const worstTrait = normalizeField(row[SRC_COL.WORST_TRAIT]);
+    
+    // 24. SOCIAL STANCE - Keep as-is or (N/A)
+    const socialStance = row[SRC_COL.SOCIAL_STANCE] || '(N/A)';
+    
+    // 25-26. SCREEN NAME & UID - Already extracted
+    
+    // 27. DDD SCORE - Calculated above
+    
+    // 28-30. CHECK-IN FIELDS - Empty for now
+    const checkedIn = '';
+    const checkInTime = '';
+    const photoUrl = '';
+    
+    // Build clean row
+    const cleanRow = [
+      timestamp,
+      birthday,
+      zodiac,
+      ageRange,
+      education,
+      zip,
+      ethnicity,
+      gender,
+      orientation,
+      industry,
+      role,
+      knowHost,
+      whichHost,
+      howWell,
+      interestsOriginal,
+      interest1,
+      interest2,
+      interest3,
+      musicPref,
+      artist,
+      song,
+      purchase,
+      worstTrait,
+      socialStance,
+      screenName,
+      uid,
+      dddScore,
+      checkedIn,
+      checkInTime,
+      photoUrl
+    ];
+    
+    cleanRows.push(cleanRow);
+    
+    // Log violations for DDD sheet
+    if (violations.length > 0) {
+      violations.forEach(v => {
+        dddLog.push({
+          screenName: screenName,
+          uid: uid,
+          row: rowNum,
+          dddScore: dddScore,
+          violationType: v.type,
+          description: v.description
+        });
+      });
+    }
+  });
+  
+  // Create or clear "Form Responses (Clean)" sheet
+  let cleanSheet = ss.getSheetByName('Form Responses (Clean)');
+  if (cleanSheet) {
+    cleanSheet.clear();
+  } else {
+    cleanSheet = ss.insertSheet('Form Responses (Clean)');
+  }
+  
+  // Write clean data
+  cleanSheet.getRange(1, 1, 1, cleanHeaders.length).setValues([cleanHeaders]);
+  if (cleanRows.length > 0) {
+    cleanSheet.getRange(2, 1, cleanRows.length, cleanHeaders.length).setValues(cleanRows);
+  }
+  
+  // Format clean sheet
+  formatCleanSheet(cleanSheet, cleanHeaders.length, cleanRows.length);
+  
+  // Create DDD sheet
+  createDDDSheet(ss, dddLog, cleanRows);
+  
+  // Count total disruptors
+  const totalDisruptors = cleanRows.filter(row => row[26] > 0).length; // DDD_Score column
+  
+  SpreadsheetApp.getUi().alert(
+    `✅ Data Cleaning Complete! ✅\n\n` +
+    `Total Responses: ${cleanRows.length}\n` +
+    `Clean Responses: ${cleanRows.length - totalDisruptors}\n` +
+    `Data Disruptors Found: ${totalDisruptors}\n` +
+    `Clean Rate: ${((cleanRows.length - totalDisruptors) / cleanRows.length * 100).toFixed(1)}%\n\n` +
+    `Sheets Created:\n` +
+    `- "Form Responses (Clean)" (Master Sheet)\n` +
+    `- "DDD" (Violation Tracking)`
+  );
+}
+
+/**
+ * NORMALIZATION FUNCTIONS
+ */
+
+function normalizeBirthday(value) {
+  const str = String(value || '').trim();
+  
+  if (!str) {
+    return { normalized: '(N/A)', violation: true };
+  }
+  
+  // Remove parentheses
+  let cleaned = str.replace(/[()]/g, '');
+  
+  // Handle MMDDYYYY format (8 digits no separators)
+  if (/^\d{8}$/.test(cleaned)) {
+    const month = cleaned.substring(0, 2);
+    const day = cleaned.substring(2, 4);
+    return { normalized: `${month}/${day}`, violation: false };
+  }
+  
+  // Handle MM/DD/YYYY format
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(cleaned)) {
+    const parts = cleaned.split('/');
+    const month = parts[0].padStart(2, '0');
+    const day = parts[1].padStart(2, '0');
+    return { normalized: `${month}/${day}`, violation: false };
+  }
+  
+  // Handle MM/DD format (already correct)
+  if (/^\d{1,2}\/\d{1,2}$/.test(cleaned)) {
+    const parts = cleaned.split('/');
+    const month = parts[0].padStart(2, '0');
+    const day = parts[1].padStart(2, '0');
+    return { normalized: `${month}/${day}`, violation: false };
+  }
+  
+  // Invalid format
+  return { normalized: '(N/A)', violation: true };
+}
+
+function normalizeField(value) {
+  const str = String(value || '').trim();
+  return str || '(N/A)';
+}
+
+function normalizeEthnicity(value) {
+  const str = String(value || '').trim().toLowerCase();
+  
+  if (!str) return '(N/A)';
+  
+  // Standardize "Prefer not to say" variations
+  if (str.includes('prefer') || str.includes('not to say')) {
+    return 'Prefer not to say';
+  }
+  
+  // Return original value (capitalize first letters)
+  return String(value).trim();
+}
+
+function normalizeGender(value) {
+  const str = String(value || '').trim();
+  return str || '(N/A)';
+}
+
+function normalizeInterests(value) {
+  const str = String(value || '').trim();
+  
+  if (!str) {
+    return {
+      original: '(N/A)',
+      interest1: '(N/A)',
+      interest2: '(N/A)',
+      interest3: '(N/A)',
+      count: 0,
+      violation: false
+    };
+  }
+  
+  // Split interests by comma
+  const interests = str.split(',').map(i => i.trim()).filter(i => i);
+  
+  return {
+    original: str,
+    interest1: interests[0] || '(N/A)',
+    interest2: interests[1] || '(N/A)',
+    interest3: interests[2] || '(N/A)',
+    count: interests.length,
+    violation: interests.length > 3
+  };
+}
+
+function normalizeMusicPreference(value) {
+  const str = String(value || '').trim();
+  
+  if (!str) {
+    return { normalized: '(N/A)', violation: false };
+  }
+  
+  // Standard music preferences from data dictionary
+  const standardPrefs = [
+    'Pop', 'Rock', 'Hip-hop', 'Electronic', 'Country', 'Indie/Alt', 'R&B'
+  ];
+  
+  // Check if it matches a standard preference (case-insensitive)
+  const isStandard = standardPrefs.some(pref => 
+    str.toLowerCase() === pref.toLowerCase()
+  );
+  
+  if (isStandard) {
+    return { normalized: str, violation: false };
+  }
+  
+  // Non-standard entry - replace with (N/A) and flag
+  return { normalized: '(N/A)', violation: true };
+}
+
+/**
+ * FORMATTING FUNCTIONS
+ */
+
+function formatCleanSheet(sheet, numCols, numRows) {
+  // Freeze header row and first 2 columns
+  sheet.setFrozenRows(1);
+  sheet.setFrozenColumns(2);
+  
+  // Format header
+  const headerRange = sheet.getRange(1, 1, 1, numCols);
+  headerRange.setFontWeight('bold');
+  headerRange.setBackground('#4a86e8');
+  headerRange.setFontColor('#ffffff');
+  headerRange.setHorizontalAlignment('center');
+  headerRange.setWrap(true);
+  
+  // Set column widths
+  sheet.setColumnWidth(1, 180); // Timestamp
+  sheet.setColumnWidth(2, 100); // Birthday
+  sheet.setColumnWidth(3, 100); // Zodiac
+  sheet.setColumnWidth(4, 80);  // Age Range
+  sheet.setColumnWidth(5, 120); // Education
+  sheet.setColumnWidth(6, 80);  // Zip
+  sheet.setColumnWidth(7, 150); // Ethnicity
+  sheet.setColumnWidth(8, 100); // Gender
+  sheet.setColumnWidth(9, 180); // Orientation
+  sheet.setColumnWidth(10, 180); // Industry
+  sheet.setColumnWidth(11, 180); // Role
+  sheet.setColumnWidth(12, 180); // Know Host
+  sheet.setColumnWidth(13, 150); // Which Host
+  sheet.setColumnWidth(14, 80);  // How Well
+  sheet.setColumnWidth(15, 300); // Interests Original
+  sheet.setColumnWidth(16, 150); // Interest 1
+  sheet.setColumnWidth(17, 150); // Interest 2
+  sheet.setColumnWidth(18, 150); // Interest 3
+  sheet.setColumnWidth(19, 120); // Music Pref
+  sheet.setColumnWidth(20, 150); // Artist
+  sheet.setColumnWidth(21, 250); // Song
+  sheet.setColumnWidth(22, 120); // Purchase
+  sheet.setColumnWidth(23, 120); // Worst Trait
+  sheet.setColumnWidth(24, 120); // Social Stance
+  sheet.setColumnWidth(25, 150); // Screen Name
+  sheet.setColumnWidth(26, 100); // UID
+  sheet.setColumnWidth(27, 100); // DDD Score
+  sheet.setColumnWidth(28, 100); // Checked-In
+  sheet.setColumnWidth(29, 150); // Check-in Time
+  sheet.setColumnWidth(30, 150); // Photo URL
+  
+  // Highlight DDD Score column
+  if (numRows > 0) {
+    const scoreRange = sheet.getRange(2, 27, numRows, 1); // Column 27 = DDD_Score
+    
+    // Color code DDD scores
+    const scoreRules = [
+      SpreadsheetApp.newConditionalFormatRule()
+        .whenNumberGreaterThanOrEqualTo(10)
+        .setBackground('#cc0000')
+        .setFontColor('#ffffff')
+        .setRanges([scoreRange])
+        .build(),
+      SpreadsheetApp.newConditionalFormatRule()
+        .whenNumberBetween(5, 9)
+        .setBackground('#ff9900')
+        .setRanges([scoreRange])
+        .build(),
+      SpreadsheetApp.newConditionalFormatRule()
+        .whenNumberBetween(1, 4)
+        .setBackground('#ffff00')
+        .setRanges([scoreRange])
+        .build()
+    ];
+    
+    sheet.setConditionalFormatRules(scoreRules);
+  }
+  
+  // Add alternating row colors for easier reading
+  if (numRows > 0) {
+    const dataRange = sheet.getRange(2, 1, numRows, numCols);
+    const altRowRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied('=ISEVEN(ROW())')
+      .setBackground('#f3f3f3')
+      .setRanges([dataRange])
+      .build();
+    
+    const existingRules = sheet.getConditionalFormatRules();
+    existingRules.push(altRowRule);
+    sheet.setConditionalFormatRules(existingRules);
+  }
+}
+
+/**
+ * DDD SHEET CREATION
+ */
+
+function createDDDSheet(ss, log, cleanRows) {
+  // Create or clear DDD sheet
+  let dddSheet = ss.getSheetByName('DDD');
+  if (dddSheet) {
+    dddSheet.clear();
+  } else {
+    dddSheet = ss.insertSheet('DDD');
+  }
+  
+  // Create DDD headers
+  const dddHeaders = [
+    'Screen Name',
+    'UID',
+    'DDD Score',
+    'Penalties',
+    'Violation Type',
+    'Description'
+  ];
+  
+  // Prepare DDD data
+  const dddData = [dddHeaders];
+  
+  // Group violations by guest
+  const guestViolations = {};
+  log.forEach(entry => {
+    const key = `${entry.screenName}|${entry.uid}`;
+    if (!guestViolations[key]) {
+      guestViolations[key] = {
+        screenName: entry.screenName,
+        uid: entry.uid,
+        dddScore: entry.dddScore,
+        violations: []
+      };
+    }
+    guestViolations[key].violations.push({
+      type: entry.violationType,
+      description: entry.description
+    });
+  });
+  
+  // Build DDD rows
+  Object.values(guestViolations).forEach(guest => {
+    guest.violations.forEach((v, idx) => {
+      dddData.push([
+        idx === 0 ? guest.screenName : '', // Only show name on first row
+        idx === 0 ? guest.uid : '',         // Only show UID on first row
+        idx === 0 ? guest.dddScore : '',    // Only show score on first row
+        idx === 0 ? guest.dddScore : '',    // Penalties = DDD Score
+        v.type,
+        v.description
+      ]);
+    });
+  });
+  
+  // Add clean guests (no violations)
+  cleanRows.forEach(row => {
+    const screenName = row[24]; // Screen Name column
+    const uid = row[25];         // UID column
+    const dddScore = row[26];    // DDD Score column
+    const key = `${screenName}|${uid}`;
+    
+    if (dddScore === 0 && !guestViolations[key]) {
+      dddData.push([
+        screenName,
+        uid,
+        0,
+        0,
+        'No Violations',
+        'Clean response - no data disruptions detected'
+      ]);
+    }
+  });
+  
+  // Write to sheet
+  if (dddData.length > 1) {
+    dddSheet.getRange(1, 1, dddData.length, dddHeaders.length).setValues(dddData);
+  } else {
+    dddSheet.getRange(1, 1, 1, dddHeaders.length).setValues([dddHeaders]);
+  }
+  
+  // Format DDD sheet
+  formatDDDSheet(dddSheet, dddHeaders.length, dddData.length - 1);
+}
+
+function formatDDDSheet(sheet, numCols, numRows) {
+  // Freeze header row
+  sheet.setFrozenRows(1);
+  sheet.setFrozenColumns(2);
+  
+  // Format header
+  const headerRange = sheet.getRange(1, 1, 1, numCols);
+  headerRange.setFontWeight('bold');
+  headerRange.setBackground('#cc0000');
+  headerRange.setFontColor('#ffffff');
+  headerRange.setHorizontalAlignment('center');
+  
+  // Set column widths
+  sheet.setColumnWidth(1, 150); // Screen Name
+  sheet.setColumnWidth(2, 100); // UID
+  sheet.setColumnWidth(3, 100); // DDD Score
+  sheet.setColumnWidth(4, 100); // Penalties
+  sheet.setColumnWidth(5, 250); // Violation Type
+  sheet.setColumnWidth(6, 400); // Description
+  
+  // Color code DDD scores
+  if (numRows > 0) {
+    const scoreRange = sheet.getRange(2, 3, numRows, 1); // DDD Score column
+    const penaltyRange = sheet.getRange(2, 4, numRows, 1); // Penalties column
+    
+    const scoreRules = [
+      SpreadsheetApp.newConditionalFormatRule()
+        .whenNumberGreaterThanOrEqualTo(10)
+        .setBackground('#cc0000')
+        .setFontColor('#ffffff')
+        .setRanges([scoreRange, penaltyRange])
+        .build(),
+      SpreadsheetApp.newConditionalFormatRule()
+        .whenNumberBetween(5, 9)
+        .setBackground('#ff9900')
+        .setRanges([scoreRange, penaltyRange])
+        .build(),
+      SpreadsheetApp.newConditionalFormatRule()
+        .whenNumberBetween(1, 4)
+        .setBackground('#ffff00')
+        .setRanges([scoreRange, penaltyRange])
+        .build(),
+      SpreadsheetApp.newConditionalFormatRule()
+        .whenNumberEqualTo(0)
+        .setBackground('#00ff00')
+        .setRanges([scoreRange, penaltyRange])
+        .build()
+    ];
+    
+    sheet.setConditionalFormatRules(scoreRules);
+    
+    // Add alternating row colors
+    const dataRange = sheet.getRange(2, 1, numRows, numCols);
+    const altRowRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied('=ISEVEN(ROW())')
+      .setBackground('#f3f3f3')
+      .setRanges([dataRange])
+      .build();
+    
+    const existingRules = sheet.getConditionalFormatRules();
+    existingRules.push(altRowRule);
+    sheet.setConditionalFormatRules(existingRules);
+  }
+}
