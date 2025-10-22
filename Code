@@ -1,0 +1,841 @@
+/**
+ * ============================================================================
+ * PANOPTICON GUEST ANALYTICS & EVENT MANAGEMENT SYSTEM
+ * ============================================================================
+ * DESCRIPTION:
+ * This script serves as the core back-end logic for the Party Wall application.
+ * It manages the Web App routing, handles real-time guest interactions (Check-In, 
+ * Screen Name updates, Photo Uploads), and provides necessary data to the 
+ * visual displays (Wall, Matchmaker, Map).
+ *
+ * It relies on global configuration variables defined in 'Config.gs' and 
+ * data processing functions defined in 'Analytics.gs' and 'DataClean.gs'.
+ * 
+ * CORE FEATURES:
+ * 1. Web App Routing: Directs traffic to the 'Display' and specialized HTML pages (Wall, MM, Check-In).
+ * 2. Guest Check-In: Verifies guest identity and marks attendance in the master sheet.
+ * 3. Identity Management: Allows guests to update their Screen Name and handles secure photo uploads to Drive.
+ * 4. Data API: Provides filtered, structured guest and connection data to the front-end visualizations.
+ * 
+ * DEPENDENCIES:
+ * - Config.gs (Global Constants)
+ * - Analytics.gs (Reporting Logic & Utilities)
+ * - DataClean.gs (Data Standardization)
+ * - Google Maps Advanced Service (for geocoding in Map features)
+ * 
+ * SETUP:
+ * - Ensure 'onOpen' is run once to create the custom spreadsheet menus.
+ * - Project requires deployment as a Web App (Execute as: Me, Access: Anyone).
+ * ============================================================================
+ */
+
+// ============================================================================
+// MENU SYSTEM & ROUTER
+// ============================================================================
+
+/**
+ * Creates custom menu items in the Google Sheets UI when the spreadsheet is opened.
+ * Adds options to access different views and administrative functions.
+ * This function runs automatically when the spreadsheet is opened.
+ */
+function onOpen() {
+  // Creates custom menu items for easy access to various features
+  // Including: Display views, Check-in interface, Analytics, and Admin tools
+}
+
+/**
+ * Main routing function for the web application.
+ * Handles all incoming HTTP GET requests and directs users to appropriate pages.
+ * 
+ * @param {Object} e - Event object containing URL parameters
+ * @returns {HtmlOutput} The appropriate HTML page based on the 'page' parameter
+ * 
+ * Available routes:
+ * - /exec (default): Main display dashboard
+ * - /exec?page=checkin: Guest check-in interface
+ * - /exec?page=intro: Introduction/welcome screen
+ * - /exec?page=wall: Social connection wall visualization
+ * - /exec?page=mm or matchmaker: Compatibility matching interface
+ * - /exec?page=map: Geographic distribution map
+ * - /exec?page=msa: MSA (Metropolitan Statistical Area) analysis placeholder
+ * - /exec?page=network: Network graph visualization placeholder
+ */
+function doGet(e) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // Initialize event parameter if not provided (prevents null reference errors)
+  if (!e || !e.parameter) { 
+    e = { parameter: {} }; 
+  }
+  
+  // Extract page parameter from URL, default to 'display' if not specified
+  const page = (e.parameter.page || 'display').toLowerCase();
+  
+  try {
+    // Route to appropriate HTML template based on page parameter
+    switch(page) {
+      case 'display': 
+        // Main dashboard - shows overview of all system features
+        return HtmlService.createTemplateFromFile('Display')
+          .evaluate()
+          .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+      
+      case 'checkin': 
+        // Guest check-in interface - allows guests to verify identity and register
+        return HtmlService.createTemplateFromFile('CheckInInterface')
+          .evaluate()
+          .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+      
+      case 'intro': 
+        // Introduction screen - welcome message and system overview
+        return HtmlService.createTemplateFromFile('intro')
+          .evaluate()
+          .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+      
+      case 'wall': 
+        // Social wall - displays guest connections and interactions
+        return HtmlService.createTemplateFromFile('wall')
+          .evaluate()
+          .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+      
+      case 'mm':
+      case 'matchmaker': 
+        // Matchmaker interface - shows compatibility scores between guests
+        return HtmlService.createTemplateFromFile('mm')
+          .evaluate()
+          .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+      
+      case 'map': 
+        // Geographic map - visualizes guest locations by ZIP code
+        return HtmlService.createTemplateFromFile('map')
+          .evaluate()
+          .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+      
+      case 'msa': 
+        // MSA Analysis - placeholder for metropolitan statistical area analysis
+        return createPlaceholderPage('msa', 'MSA Analysis'); 
+      
+      case 'network': 
+        // Network Graph - placeholder for social network visualization
+        return createPlaceholderPage('network', 'Network Graph Visualization'); 
+      
+      default: 
+        // Fallback to display page if unknown route is requested
+        return HtmlService.createTemplateFromFile('Display')
+          .evaluate()
+          .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    }
+  } catch (error) {
+    // Handle any routing errors with a friendly error page
+    return createErrorPage(error);
+  }
+}
+
+/**
+ * Test function to verify the display page loads correctly.
+ * Useful for debugging and development.
+ */
+function testOpenDisplay() { 
+  // Opens the main display page for testing purposes
+}
+
+// ============================================================================
+// CORE GUEST MANAGEMENT - WORKING IMPLEMENTATIONS
+// ============================================================================
+
+/**
+ * Processes guest check-in requests from the web interface.
+ * Verifies guest identity using ZIP code, gender, and birthday.
+ * 
+ * @param {Object} payload - Guest verification data
+ * @param {string} payload.zip - Guest's 5-digit ZIP code
+ * @param {string} payload.gender - Guest's gender (man/woman/nonbinary/other)
+ * @param {string} payload.dob - Guest's birthday in MM/DD format
+ * 
+ * @returns {Object} Response object with check-in status
+ */
+function checkInGuest(payload) {
+  Logger.log('=== CHECK-IN STARTED ===');
+  Logger.log('Payload received: ' + JSON.stringify(payload));
+  
+  try {
+    // Extract and validate parameters
+    const zipCode = String(payload.zip || '').trim();
+    const gender = String(payload.gender || '').trim();
+    const birthday = String(payload.dob || '').trim();
+    
+    if (!zipCode || !gender || !birthday) {
+      return {
+        ok: false,
+        message: 'Missing required fields: ZIP code, gender, and birthday are required'
+      };
+    }
+    
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const cleanSheet = ss.getSheetByName('Form Responses (Clean)');
+    
+    if (!cleanSheet) {
+      return {
+        ok: false,
+        message: 'System error: Data sheet not found. Please contact support.'
+      };
+    }
+    
+    const data = cleanSheet.getDataRange().getValues();
+    
+    // Normalize birthday for comparison (remove year if present, handle leading zeros)
+    let normalizedBirthday;
+    const birthdayParts = birthday.split('/');
+    if (birthdayParts.length >= 2) {
+      const month = parseInt(birthdayParts[0], 10);
+      const day = parseInt(birthdayParts[1], 10);
+      normalizedBirthday = month + '/' + day; // No leading zeros
+    } else {
+      normalizedBirthday = birthday;
+    }
+    
+    Logger.log(`Searching for: ZIP="${zipCode}", Gender="${gender}", Birthday="${normalizedBirthday}"`);
+    
+    // Search for matching guest
+    for (let i = 1; i < data.length; i++) {
+      const rowBirthdayRaw = data[i][1]; // Column B (Birthday)
+      const rowZip = String(data[i][5] || '').trim(); // Column F (ZIP Code)
+      const rowGender = String(data[i][7] || '').trim(); // Column H (Gender)
+      const rowScreenName = String(data[i][24] || '').trim(); // Column Y (Screen Name)
+      const rowUID = String(data[i][25] || '').trim(); // Column Z (UID)
+      
+      // Normalize row birthday - handle both Date objects and strings
+      let normalizedRowBirthday;
+      if (rowBirthdayRaw instanceof Date) {
+        // Date object: extract month and day
+        const month = rowBirthdayRaw.getMonth() + 1; // getMonth() is 0-indexed
+        const day = rowBirthdayRaw.getDate();
+        normalizedRowBirthday = month + '/' + day;
+      } else {
+        // String: parse MM/DD
+        const rowBirthday = String(rowBirthdayRaw || '').trim();
+        normalizedRowBirthday = rowBirthday.split('/').slice(0, 2).join('/');
+      }
+      
+      // Check for match
+      if (rowZip === zipCode && 
+          rowGender.toLowerCase() === gender.toLowerCase() && 
+          normalizedRowBirthday === normalizedBirthday) {
+        
+        Logger.log(`✓ Guest found at row ${i+1}: ${rowScreenName} (${rowUID})`);
+        
+        // Check if already checked in
+        const alreadyCheckedIn = String(data[i][27] || '').trim(); // Column AB (Checked-In)
+        
+        if (alreadyCheckedIn === 'Y' || alreadyCheckedIn === 'Yes') {
+          const existingTime = data[i][28]; // Column AC (Check-in Time)
+          Logger.log('Guest already checked in at: ' + existingTime);
+          
+          return {
+            ok: true,
+            message: 'Welcome back! You were already checked in.',
+            screenName: rowScreenName,
+            uid: rowUID,
+            alreadyCheckedIn: true,
+            checkInTime: existingTime,
+            photoUrl: data[i][29] || '' // Column AD (Photo URL)
+          };
+        }
+        
+        // Perform check-in
+        const checkInTime = new Date();
+        const targetRow = i + 1;
+        
+        Logger.log(`Checking in at row ${targetRow}...`);
+        
+        // Write check-in data
+        cleanSheet.getRange(targetRow, 28).setValue('Y'); // Column AB
+        cleanSheet.getRange(targetRow, 29).setValue(checkInTime); // Column AC
+        SpreadsheetApp.flush();
+        
+        Logger.log(`✓ Check-in successful: ${rowScreenName}`);
+        
+        return {
+          ok: true,
+          message: 'Check-in successful! Welcome, ' + rowScreenName + '!',
+          screenName: rowScreenName,
+          uid: rowUID,
+          alreadyCheckedIn: false,
+          checkInTime: checkInTime.toLocaleString(),
+          photoUrl: data[i][29] || ''
+        };
+      }
+    }
+    
+    // No match found
+    Logger.log('❌ No matching guest found');
+    return {
+      ok: false,
+      message: 'Guest not found. Please verify your ZIP code, gender, and birthday match your registration.'
+    };
+    
+  } catch (error) {
+    Logger.log('❌ ERROR: ' + error.toString());
+    return {
+      ok: false,
+      message: 'System error: ' + error.message
+    };
+  }
+}
+
+/**
+ * Updates a guest's display name (screen name) in the system.
+ * 
+ * @param {Object} payload - Update request data
+ * @param {string} payload.uid - Guest's unique identifier
+ * @param {string} payload.newScreenName - Desired new screen name (3-50 characters)
+ * 
+ * @returns {Object} Response object
+ */
+function updateGuestScreenName(payload) {
+  Logger.log('=== UPDATE SCREEN NAME ===');
+  Logger.log('Payload: ' + JSON.stringify(payload));
+  
+  try {
+    const uid = String(payload.uid || '').trim();
+    const newScreenName = String(payload.newScreenName || '').trim();
+    
+    if (!uid || !newScreenName) {
+      return {
+        ok: false,
+        message: 'UID and new screen name are required'
+      };
+    }
+    
+    // Validate screen name length
+    if (newScreenName.length < 3 || newScreenName.length > 50) {
+      return {
+        ok: false,
+        message: 'Screen name must be 3-50 characters'
+      };
+    }
+    
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const cleanSheet = ss.getSheetByName('Form Responses (Clean)');
+    
+    if (!cleanSheet) {
+      return {ok: false, message: 'System error: Data sheet not found'};
+    }
+    
+    const data = cleanSheet.getDataRange().getValues();
+    
+    // Find guest by UID
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][25] || '').trim() === uid) { // Column Z (UID)
+        const targetRow = i + 1;
+        
+        Logger.log(`Updating screen name for row ${targetRow}`);
+        
+        // Update Column Y (Screen Name)
+        cleanSheet.getRange(targetRow, 25).setValue(newScreenName);
+        SpreadsheetApp.flush();
+        
+        Logger.log(`✓ Screen name updated to: ${newScreenName}`);
+        
+        return {
+          ok: true,
+          message: 'Screen name updated successfully!',
+          newScreenName: newScreenName
+        };
+      }
+    }
+    
+    return {ok: false, message: 'Guest not found'};
+    
+  } catch (error) {
+    Logger.log('❌ ERROR: ' + error.toString());
+    return {ok: false, message: 'Update failed: ' + error.message};
+  }
+}
+
+/**
+ * Handles photo uploads from guests via the check-in interface.
+ * 
+ * @param {Object} payload - Photo upload data
+ * @param {string} payload.uid - Guest's unique identifier
+ * @param {string} payload.fileName - Original file name
+ * @param {string} payload.mimeType - Image MIME type (e.g., 'image/jpeg')
+ * @param {string} payload.base64Data - Base64-encoded image data (without prefix)
+ * 
+ * @returns {Object} Response object
+ */
+function uploadGuestPhoto(payload) {
+  Logger.log('=== PHOTO UPLOAD ===');
+  
+  try {
+    const uid = payload.uid;
+    const fileName = payload.fileName;
+    const mimeType = payload.mimeType;
+    const base64Data = payload.base64Data;
+    
+    if (!uid || !fileName || !mimeType || !base64Data) {
+      return {ok: false, message: 'Missing required upload parameters'};
+    }
+    
+    if (!mimeType.startsWith('image/')) {
+      return {ok: false, message: 'Only image files are allowed'};
+    }
+    
+    // Get Guest Photos folder
+    const folderId = '1ZcP5jpYsYy0xuGqlFYNrDgG4K40eEKJB';
+    let folder;
+    
+    try {
+      folder = DriveApp.getFolderById(folderId);
+    } catch (e) {
+      const folders = DriveApp.getFoldersByName('Guest Photos');
+      folder = folders.hasNext() ? folders.next() : DriveApp.createFolder('Guest Photos');
+    }
+    
+    const uniqueFileName = `${uid}_${fileName}`;
+    
+    // Delete old photo if exists
+    const existingFiles = folder.getFilesByName(uniqueFileName);
+    while (existingFiles.hasNext()) {
+      existingFiles.next().setTrashed(true);
+    }
+    
+    // Upload new photo
+    const decodedData = Utilities.base64Decode(base64Data);
+    const blob = Utilities.newBlob(decodedData, mimeType, uniqueFileName);
+    const file = folder.createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    const fileUrl = file.getUrl();
+    
+    Logger.log(`Photo uploaded: ${fileUrl}`);
+    
+    // Update sheet
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const cleanSheet = ss.getSheetByName('Form Responses (Clean)');
+    
+    if (cleanSheet) {
+      const data = cleanSheet.getDataRange().getValues();
+      
+      for (let i = 1; i < data.length; i++) {
+        if (String(data[i][25] || '').trim() === uid) { // Column Z (UID)
+          const targetRow = i + 1;
+          cleanSheet.getRange(targetRow, 30).setValue(fileUrl); // Column AD (Photo URL)
+          SpreadsheetApp.flush();
+          Logger.log(`✓ Photo URL saved to row ${targetRow}`);
+          break;
+        }
+      }
+    }
+    
+    return {
+      ok: true,
+      message: 'Photo uploaded successfully!',
+      fileUrl: fileUrl
+    };
+    
+  } catch (error) {
+    Logger.log('❌ ERROR: ' + error.toString());
+    return {ok: false, message: 'Upload failed: ' + error.message};
+  }
+}
+
+// ============================================================================
+// DATA FETCHERS (API endpoints for HTML pages)
+// ============================================================================
+
+/**
+ * Retrieves guest data for the social wall visualization.
+ * Returns all checked-in guests with their profiles and connection data.
+ * 
+ * @returns {Object} Wall data structure containing guest arrays and metadata
+ * 
+ * Data includes:
+ * - Guest profiles (screen name, UID, photo URL, demographics)
+ * - Connection scores between guests
+ * - Check-in timestamps
+ * - Filtered by check-in status
+ */
+function getWallData() { 
+  // Read master sheet data
+  // Filter for checked-in guests only
+  // Format guest profiles with screen names, photos, and basic info
+  // Calculate or retrieve connection scores
+  // Return structured JSON for wall display
+}
+
+/**
+ * Provides detailed connection data between all guest pairs.
+ * Used for advanced visualizations showing relationship strengths.
+ * 
+ * @returns {Array} Array of connection objects with scores and metadata
+ * 
+ * Each connection includes:
+ * - Source guest UID
+ * - Target guest UID
+ * - Connection strength score (0-100)
+ * - Connection basis (shared interests, demographics, etc.)
+ */
+function getDetailedWallConnections() { 
+  // Retrieve all guest pairs
+  // Calculate compatibility scores based on:
+  //   - Demographic similarity
+  //   - Geographic proximity
+  //   - Shared attributes
+  // Return array of connections with weights
+}
+
+/**
+ * Identifies violations of the "Don't Date Doppelgängers" rule.
+ * Finds guest pairs that are too similar across multiple dimensions.
+ * 
+ * @returns {Array} Array of problematic pairings
+ * 
+ * Checks for excessive similarity in:
+ * - Demographics (age, gender)
+ * - Location (same ZIP code)
+ * - Other identifying factors
+ */
+function getDDDViolations() { 
+  // Analyze all guest pairs
+  // Calculate multi-dimensional similarity scores
+  // Flag pairs exceeding similarity threshold
+  // Return list of potential "doppelgänger" matches
+}
+
+/**
+ * Returns the introductory text for the system welcome screen.
+ * 
+ * @returns {string} Formatted intro message
+ */
+function getIntroText() { 
+  return 'NETWORK OPTIMIZATION SYSTEM ACTIVE // ANALYZING SOCIAL CONNECTIONS // DEMOGRAPHIC INTEGRATION PROTOCOL ENABLED // REAL-TIME PATTERN DETECTION // CURATED EXPERIENCE OPTIMIZATION IN PROGRESS'; 
+}
+
+/**
+ * Calculates and returns compatibility matches for the matchmaker interface.
+ * Finds optimal pairings based on complementary characteristics.
+ * 
+ * @returns {Array} Array of match objects with scores and reasons
+ * 
+ * Matching algorithm considers:
+ * - Demographic diversity (opposite genders, different ages)
+ * - Geographic diversity (different regions)
+ * - Attribute compatibility
+ * - Avoids "doppelgänger" matches
+ */
+function getCompatibilityMatches() { 
+  // Load all checked-in guests
+  // Run compatibility algorithm
+  // Score each potential pairing
+  // Filter for high-quality matches only
+  // Return top matches with explanations
+}
+
+/**
+ * Retrieves all ZIP code data for map visualization.
+ * Includes guest counts, coordinates, and demographic breakdowns.
+ * 
+ * @returns {Array} Array of ZIP code objects with location and guest data
+ * 
+ * Each ZIP code entry includes:
+ * - ZIP code string
+ * - Latitude/longitude coordinates
+ * - Guest count at that location
+ * - Demographic distribution (gender, age groups)
+ */
+function getAllZipData() { 
+  // Extract unique ZIP codes from master sheet
+  // Geocode each ZIP to get coordinates
+  // Count guests per ZIP
+  // Calculate demographic breakdowns
+  // Return formatted array for map rendering
+}
+
+// ============================================================================
+// ADMIN & UTILITIES
+// ============================================================================
+
+/**
+ * Administrative function to sync all guest photos from Drive.
+ * Scans the Photos folder and updates guest records with current URLs.
+ * Useful for recovering from data issues or migration.
+ */
+function manualSyncAllPhotos() { 
+  // Access Photos folder in Google Drive
+  // Iterate through all image files
+  // Extract UID from filename
+  // Update corresponding guest record with file URL
+  // Log sync results
+}
+
+/**
+ * Exports all sheets in the spreadsheet as individual CSV files.
+ * Creates a ZIP archive in Google Drive containing all exports.
+ * 
+ * @returns {string} URL to the created ZIP file
+ * 
+ * Useful for:
+ * - Data backups
+ * - External analysis
+ * - Sharing with third-party tools
+ */
+function exportAllSheetsAsCsv() { 
+  // Get all sheets from active spreadsheet
+  // Convert each sheet to CSV format
+  // Create ZIP file in Drive
+  // Add each CSV to the archive
+  // Return download URL
+}
+
+/**
+ * Gets or creates the Photos folder in Google Drive.
+ * Ensures a consistent storage location for all guest photos.
+ * 
+ * @returns {Folder} Google Drive folder object
+ * @private
+ */
+function getOrCreatePhotosFolder_() { 
+  // Check if Photos folder exists in Drive root
+  // If not found: create new folder with appropriate name
+  // Set folder permissions
+  // Return folder object for file operations
+}
+
+/**
+ * Extracts all unique ZIP codes from the master guest sheet.
+ * 
+ * @returns {Array<string>} Array of 5-digit ZIP code strings
+ */
+function getZipCodesFromSheet() { 
+  // Read ZIP code column from master sheet
+  // Remove duplicates
+  // Validate format (5 digits)
+  // Return sorted array
+}
+
+/**
+ * Geocodes a full address to latitude/longitude coordinates.
+ * Uses Google Maps Geocoding API.
+ * 
+ * @param {string} address - Full address string
+ * @returns {Object} Coordinates object {lat, lng} or null if not found
+ */
+function getAddressCoordinates(address) { 
+  // Call Google Maps Geocoding API
+  // Parse response for coordinates
+  // Handle errors (invalid address, API limits)
+  // Return lat/lng object or null
+}
+
+/**
+ * Geocodes a ZIP code to its approximate center coordinates.
+ * Uses Google Maps Geocoding API.
+ * 
+ * @param {string} zipCode - 5-digit ZIP code
+ * @returns {Object} Coordinates object {lat, lng} or null if not found
+ */
+function getZipCodeCoordinates(zipCode) { 
+  // Format ZIP code for geocoding
+  // Call Google Maps Geocoding API with ZIP
+  // Extract latitude and longitude
+  // Cache results for performance
+  // Return coordinates or null
+}
+
+/**
+ * Creates a placeholder page for features not yet implemented.
+ * 
+ * @param {string} pageName - Internal page identifier
+ * @param {string} title - Display title for the page
+ * @returns {HtmlOutput} Simple HTML page with "coming soon" message
+ */
+function createPlaceholderPage(pageName, title) { 
+  // Generate basic HTML structure
+  // Include page title and "coming soon" message
+  // Add navigation back to main display
+  // Return as HtmlOutput
+}
+
+/**
+ * Creates an error page to display when exceptions occur.
+ * Shows user-friendly message and technical details for debugging.
+ * 
+ * @param {Error} error - JavaScript Error object
+ * @returns {HtmlOutput} HTML error page with details
+ */
+function createErrorPage(error) { 
+  // Extract error message and stack trace
+  // Format as user-friendly HTML
+  // Include troubleshooting suggestions
+  // Log error to Apps Script console
+  // Return formatted error page
+}
+
+// ============================================================================
+// SHARED CORE UTILITIES
+// ============================================================================
+
+/**
+ * Safely converts any value to a string, handling null/undefined.
+ * 
+ * @param {*} val - Any value to convert
+ * @returns {string} String representation, empty string if null/undefined
+ * @private
+ */
+function safeString_(val) { 
+  // Check for null or undefined
+  // Convert to string using toString()
+  // Trim whitespace
+  // Return clean string or empty string
+}
+
+/**
+ * Finds the index of a header in a row, trying multiple possible names.
+ * Useful for handling sheets with inconsistent column naming.
+ * 
+ * @param {Array<string>} headers - Array of header strings from sheet
+ * @param {Array<string>} possibilities - Array of possible column names to search for
+ * @returns {number} Index of found header, or -1 if not found
+ * @private
+ */
+function findHeaderIndex_(headers, possibilities) { 
+  // Iterate through possibilities array
+  // Check each header (case-insensitive) for matches
+  // Return index of first match
+  // Return -1 if no match found
+}
+
+/**
+ * Normalizes ZIP code to standard 5-digit format.
+ * 
+ * @param {string|number} zip - ZIP code in any format
+ * @returns {string} 5-digit ZIP code string, or empty string if invalid
+ * @private
+ */
+function normalizeZip_(zip) { 
+  // Convert to string
+  // Remove non-numeric characters
+  // Pad with leading zeros to 5 digits
+  // Validate length
+  // Return formatted ZIP or empty string
+}
+
+/**
+ * Normalizes gender values to standard lowercase format.
+ * Maps various input formats to: 'man', 'woman', 'nonbinary', 'other'
+ * 
+ * @param {string} g - Raw gender input
+ * @returns {string} Normalized gender string
+ * @private
+ */
+function normalizeGender_(g) { 
+  // Convert to lowercase
+  // Trim whitespace
+  // Map common variations:
+  //   - 'male'/'m' → 'man'
+  //   - 'female'/'f' → 'woman'
+  //   - 'nb'/'non-binary' → 'nonbinary'
+  // Return standardized value
+}
+
+/**
+ * Parses a month/day string in MM/DD format.
+ * 
+ * @param {string} str - Date string in MM/DD format
+ * @returns {Object} Object with month and day properties, or null if invalid
+ * @private
+ */
+function parseMonthDay_(str) { 
+  // Split string on '/' character
+  // Parse month and day as integers
+  // Validate ranges (month 1-12, day 1-31)
+  // Return {month: X, day: Y} or null
+}
+
+/**
+ * Extracts month and day from a spreadsheet cell value.
+ * Handles both string (MM/DD) and Date object formats.
+ * 
+ * @param {string|Date} val - Cell value from sheet
+ * @returns {Object} Object with month and day, or null if invalid
+ * @private
+ */
+function monthDayFromCell_(val) { 
+  // Check if value is Date object
+  // If Date: extract month and day using getMonth() and getDate()
+  // If string: parse using parseMonthDay_()
+  // Return {month, day} or null
+}
+
+/**
+ * Resolves a column index from a column map using field name.
+ * Handles multiple possible column name variations.
+ * 
+ * @param {Object} colMap - Map of column names to indices
+ * @param {string} field - Field name to look up
+ * @returns {number} Column index, or -1 if not found
+ * @private
+ */
+function resolveColumnIndex_(colMap, field) { 
+  // Check if field exists directly in colMap
+  // Try common variations (lowercase, with spaces, etc.)
+  // Return index if found
+  // Return -1 if not found
+}
+
+/**
+ * Creates a map of column names to their indices from a header row.
+ * Makes data access more reliable and readable.
+ * 
+ * @param {Array<string>} header - Array of header values from first row
+ * @returns {Object} Map object with column names as keys, indices as values
+ * @private
+ */
+function getColumnMap_(header) { 
+  // Iterate through header array
+  // Normalize each header name (lowercase, trim)
+  // Create object mapping name → index
+  // Return column map for easy lookups
+}
+
+/**
+ * Formats a timestamp for display.
+ * 
+ * @param {Date|string} timestamp - Timestamp to format
+ * @returns {string} Formatted date/time string
+ */
+function formatTime(timestamp) { 
+  // Convert to Date object if string
+  // Format as readable string (e.g., "Oct 22, 2025 3:45 PM")
+  // Return formatted string
+}
+
+/**
+ * Extracts the file ID from a Google Drive URL.
+ * Handles various Drive URL formats.
+ * 
+ * @param {string} url - Google Drive file URL
+ * @returns {string} File ID, or empty string if invalid URL
+ */
+function extractDriveFileId(url) { 
+  // Parse URL for Drive file ID patterns
+  // Handle formats:
+  //   - drive.google.com/file/d/FILE_ID/...
+  //   - drive.google.com/open?id=FILE_ID
+  // Extract and return file ID
+  // Return empty string if no match
+}
+
+/**
+ * Processes a raw photo URL from the sheet into a usable format.
+ * Converts Drive URLs to direct image links for embedding.
+ * 
+ * @param {string} rawUrl - Raw URL from spreadsheet
+ * @returns {string} Processed URL for direct image access
+ */
+function processPhotoUrl(rawUrl) { 
+  // Extract Drive file ID using extractDriveFileId()
+  // Convert to direct thumbnail URL format
+  // Handle different URL types (Drive, external, etc.)
+  // Return optimized URL for image display
+}
