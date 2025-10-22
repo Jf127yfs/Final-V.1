@@ -1,0 +1,237 @@
+/**
+ * Master_Desc.gs - Automatic Workbook Documentation
+ * Creates a comprehensive overview of all sheets, columns, and headers
+ * Useful for providing context and understanding data structure
+ */
+
+const MASTER_DESC_SHEET = 'Master_Desc';
+
+/**
+ * Add menu item to Google Sheets UI
+ * Run this automatically when spreadsheet opens
+ */
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('📋 Documentation')
+    .addItem('Generate Master_Desc', 'generateMasterDesc')
+    .addItem('Refresh All Analytics', 'refreshAllAnalytics')
+    .addToUi();
+}
+
+/**
+ * Main function: Generate Master_Desc sheet
+ * Documents all sheets, their columns, and sample data
+ */
+function generateMasterDesc() {
+  const ss = SpreadsheetApp.getActive();
+  const allSheets = ss.getSheets();
+  
+  // Prepare output data
+  const output = [
+    ['Sheet Name', 'Column #', 'Column Name', 'Data Type', 'Sample Values', 'Row Count', 'Notes']
+  ];
+  
+  allSheets.forEach(sheet => {
+    const sheetName = sheet.getName();
+    
+    // Skip Master_Desc itself to avoid recursion
+    if (sheetName === MASTER_DESC_SHEET) return;
+    
+    const data = sheet.getDataRange().getValues();
+    const rowCount = data.length;
+    
+    if (rowCount === 0) {
+      output.push([sheetName, '', '(empty sheet)', '', '', 0, 'No data']);
+      return;
+    }
+    
+    const headers = data[0];
+    const numCols = headers.length;
+    
+    // Document each column
+    headers.forEach((header, colIdx) => {
+      const colNum = colIdx + 1;
+      const colName = String(header || `(Column ${colNum})`).trim();
+      
+      // Analyze column data type and get samples
+      const analysis = analyzeColumn_(data, colIdx);
+      
+      // Notes about special columns
+      let notes = '';
+      if (colName.startsWith('code_')) notes = 'Categorical code';
+      else if (colName.startsWith('oh_')) notes = 'One-hot encoded';
+      else if (colName.startsWith('has_')) notes = 'Presence flag';
+      else if (colName.toLowerCase().includes('timestamp')) notes = 'Timestamp';
+      else if (colName === 'UID') notes = 'Unique identifier';
+      
+      output.push([
+        sheetName,
+        colNum,
+        colName,
+        analysis.type,
+        analysis.samples,
+        rowCount - 1, // Exclude header row
+        notes
+      ]);
+    });
+    
+    // Add a blank row between sheets for readability
+    output.push(['', '', '', '', '', '', '']);
+  });
+  
+  // Write to Master_Desc sheet
+  writeMasterDesc_(output);
+  
+  // Format the sheet
+  formatMasterDesc_();
+  
+  SpreadsheetApp.getUi().alert(
+    `✅ Master_Desc generated!\n\n` +
+    `Documented ${allSheets.length - 1} sheets with ${output.length - 1} total columns.`
+  );
+}
+
+/**
+ * Analyze a column to determine data type and get sample values
+ */
+function analyzeColumn_(data, colIdx) {
+  if (data.length < 2) {
+    return { type: 'Empty', samples: '' };
+  }
+  
+  // Get up to 3 unique non-empty sample values (excluding header)
+  const samples = [];
+  const seen = new Set();
+  
+  for (let i = 1; i < data.length && samples.length < 3; i++) {
+    const val = data[i][colIdx];
+    if (val === null || val === undefined || val === '') continue;
+    
+    const valStr = String(val).trim();
+    if (valStr && !seen.has(valStr)) {
+      seen.add(valStr);
+      samples.push(valStr);
+    }
+  }
+  
+  // Determine data type
+  let type = 'Unknown';
+  if (samples.length > 0) {
+    const firstVal = data[1][colIdx];
+    
+    if (firstVal instanceof Date) {
+      type = 'Date';
+    } else if (typeof firstVal === 'number') {
+      // Check if it's all 0s and 1s (binary flag)
+      const allBinary = data.slice(1).every(row => {
+        const v = row[colIdx];
+        return v === 0 || v === 1 || v === '' || v === null;
+      });
+      type = allBinary ? 'Binary (0/1)' : 'Number';
+    } else if (typeof firstVal === 'string') {
+      // Check if it looks like codes (all numeric strings 1-10)
+      const allCodes = data.slice(1, Math.min(20, data.length)).every(row => {
+        const v = row[colIdx];
+        if (v === '' || v === null) return true;
+        const num = Number(v);
+        return isFinite(num) && num >= 1 && num <= 50;
+      });
+      type = allCodes ? 'Code (1-N)' : 'Text';
+    }
+  }
+  
+  return {
+    type: type,
+    samples: samples.join('; ')
+  };
+}
+
+/**
+ * Write output to Master_Desc sheet
+ */
+function writeMasterDesc_(data) {
+  const ss = SpreadsheetApp.getActive();
+  let sheet = ss.getSheetByName(MASTER_DESC_SHEET);
+  
+  if (!sheet) {
+    sheet = ss.insertSheet(MASTER_DESC_SHEET, 0); // Insert as first sheet
+  } else {
+    sheet.clear();
+  }
+  
+  if (data.length === 0) return;
+  
+  sheet.getRange(1, 1, data.length, data[0].length).setValues(data);
+}
+
+/**
+ * Format Master_Desc sheet for better readability
+ */
+function formatMasterDesc_() {
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getSheetByName(MASTER_DESC_SHEET);
+  if (!sheet) return;
+  
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+  if (lastRow < 1 || lastCol < 1) return;
+  
+  // Format header row
+  const headerRange = sheet.getRange(1, 1, 1, lastCol);
+  headerRange
+    .setBackground('#434343')
+    .setFontColor('#ffffff')
+    .setFontWeight('bold')
+    .setFontSize(11);
+  
+  // Freeze header row
+  sheet.setFrozenRows(1);
+  
+  // Auto-resize all columns
+  for (let i = 1; i <= lastCol; i++) {
+    sheet.autoResizeColumn(i);
+  }
+  
+  // Set column widths for specific columns
+  sheet.setColumnWidth(1, 180); // Sheet Name
+  sheet.setColumnWidth(2, 80);  // Column #
+  sheet.setColumnWidth(3, 200); // Column Name
+  sheet.setColumnWidth(4, 120); // Data Type
+  sheet.setColumnWidth(5, 250); // Sample Values
+  sheet.setColumnWidth(6, 100); // Row Count
+  sheet.setColumnWidth(7, 150); // Notes
+  
+  // Add alternating row colors for each sheet
+  if (lastRow > 1) {
+    let currentSheet = '';
+    let useGray = false;
+    
+    for (let row = 2; row <= lastRow; row++) {
+      const sheetName = sheet.getRange(row, 1).getValue();
+      
+      if (sheetName && sheetName !== currentSheet) {
+        currentSheet = sheetName;
+        useGray = !useGray;
+      }
+      
+      if (sheetName) { // Only color non-empty rows
+        const rowRange = sheet.getRange(row, 1, 1, lastCol);
+        if (useGray) {
+          rowRange.setBackground('#f3f3f3');
+        }
+      }
+    }
+  }
+  
+  // Add borders
+  if (lastRow > 1) {
+    sheet.getRange(2, 1, lastRow - 1, lastCol)
+      .setBorder(null, null, true, null, null, null, '#cccccc', SpreadsheetApp.BorderStyle.SOLID_THIN);
+  }
+  
+  // Center align column numbers and row counts
+  if (lastRow > 1) {
+    sheet.getRange(2, 2, lastRow - 1, 1).setHorizontalAlignment('center'); // Column #
+    sheet.getRange(2, 6, lastRow - 1, 1).setHorizontalAlignment('center'); // Row Count
+  }
+}
