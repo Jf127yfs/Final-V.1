@@ -183,13 +183,13 @@ function checkInGuest(payload) {
     
     const data = cleanSheet.getDataRange().getValues();
     
-    // Normalize birthday for comparison (remove year if present, handle leading zeros)
+    // Normalize birthday for comparison (remove year if present, add leading zeros to match sheet format)
     let normalizedBirthday;
     const birthdayParts = birthday.split('/');
     if (birthdayParts.length >= 2) {
       const month = parseInt(birthdayParts[0], 10);
       const day = parseInt(birthdayParts[1], 10);
-      normalizedBirthday = month + '/' + day; // No leading zeros
+      normalizedBirthday = String(month).padStart(2, '0') + '/' + String(day).padStart(2, '0'); // With leading zeros
     } else {
       normalizedBirthday = birthday;
     }
@@ -207,14 +207,21 @@ function checkInGuest(payload) {
       // Normalize row birthday - handle both Date objects and strings
       let normalizedRowBirthday;
       if (rowBirthdayRaw instanceof Date) {
-        // Date object: extract month and day
+        // Date object: extract month and day with leading zeros
         const month = rowBirthdayRaw.getMonth() + 1; // getMonth() is 0-indexed
         const day = rowBirthdayRaw.getDate();
-        normalizedRowBirthday = month + '/' + day;
+        normalizedRowBirthday = String(month).padStart(2, '0') + '/' + String(day).padStart(2, '0');
       } else {
-        // String: parse MM/DD
+        // String: parse MM/DD and ensure leading zeros
         const rowBirthday = String(rowBirthdayRaw || '').trim();
-        normalizedRowBirthday = rowBirthday.split('/').slice(0, 2).join('/');
+        const rowParts = rowBirthday.split('/');
+        if (rowParts.length >= 2) {
+          const month = parseInt(rowParts[0], 10);
+          const day = parseInt(rowParts[1], 10);
+          normalizedRowBirthday = String(month).padStart(2, '0') + '/' + String(day).padStart(2, '0');
+        } else {
+          normalizedRowBirthday = rowBirthday;
+        }
       }
       
       // Check for match
