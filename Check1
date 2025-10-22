@@ -41,8 +41,16 @@ function checkInGuestByInfo(params) {
   const data = cleanSheet.getDataRange().getValues();
   Logger.log(`Total rows in sheet: ${data.length}`);
   
-  // Normalize birthday
-  const normalizedBirthday = birthday.split('/').slice(0, 2).join('/');
+  // Normalize birthday with leading zeros to match sheet format
+  const birthdayParts = birthday.split('/');
+  let normalizedBirthday;
+  if (birthdayParts.length >= 2) {
+    const month = parseInt(birthdayParts[0], 10);
+    const day = parseInt(birthdayParts[1], 10);
+    normalizedBirthday = String(month).padStart(2, '0') + '/' + String(day).padStart(2, '0');
+  } else {
+    normalizedBirthday = birthday;
+  }
   Logger.log(`Searching for: ZIP="${zipCode}", Gender="${gender}", Birthday="${normalizedBirthday}"`);
   
   // Search for matching guest
@@ -52,9 +60,17 @@ function checkInGuestByInfo(params) {
     const rowGender = String(data[i][7] || '').trim(); // Column H (index 7)
     const rowScreenName = String(data[i][24] || '').trim(); // Column Y (index 24)
     const rowUID = String(data[i][25] || '').trim(); // Column Z (index 25)
-    
-    // Normalize row birthday
-    const normalizedRowBirthday = rowBirthday.split('/').slice(0, 2).join('/');
+
+    // Normalize row birthday with leading zeros
+    const rowParts = rowBirthday.split('/');
+    let normalizedRowBirthday;
+    if (rowParts.length >= 2) {
+      const month = parseInt(rowParts[0], 10);
+      const day = parseInt(rowParts[1], 10);
+      normalizedRowBirthday = String(month).padStart(2, '0') + '/' + String(day).padStart(2, '0');
+    } else {
+      normalizedRowBirthday = rowBirthday;
+    }
     
     // Check for match
     if (rowZip === zipCode && 
