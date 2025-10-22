@@ -1,0 +1,1283 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tower Network Visualization</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Courier New', monospace; background: #000; color: #0f0; overflow: hidden; height: 100vh; }
+    #ticker { background: #111; border-bottom: 2px solid #0f0; padding: 10px 0; height: 50px; display: flex; align-items: center; justify-content: center; position: relative; box-shadow: 0 0 20px rgba(0, 255, 0, 0.3); }
+    #ticker-content { font-size: 18px; font-weight: bold; letter-spacing: 2px; text-shadow: 0 0 10px #0f0; }
+    #cycle-indicator { position: absolute; bottom: 0; left: 0; height: 3px; background: #0f0; transition: width 0.1s linear; box-shadow: 0 0 10px #0f0; }
+    #container { display: flex; height: calc(100vh - 50px); }
+    #info-panel { width: 300px; background: #0a0a0a; border-right: 2px solid #0f0; padding: 20px; overflow-y: auto; box-shadow: 0 0 20px rgba(0, 255, 0, 0.3); }
+    #info-panel h2 { border-bottom: 2px solid #0f0; padding-bottom: 10px; margin-bottom: 15px; font-size: 16px; text-shadow: 0 0 10px #0f0; }
+    .stat-box { background: #111; border: 1px solid #0f0; padding: 12px; margin-bottom: 12px; box-shadow: 0 0 10px rgba(0, 255, 0, 0.2); }
+    .stat-label { font-size: 11px; opacity: 0.7; margin-bottom: 5px; }
+    .stat-value { font-size: 20px; font-weight: bold; }
+    #viz-panel { flex: 1; position: relative; background: #000; }
+    canvas { display: block; width: 100%; height: 100%; }
+    
+    #critical-alert { position: absolute; bottom: 20px; left: 20px; width: 550px; height: 400px; background: rgba(0, 0, 0, 0.95); border: 3px solid #ff0; padding: 20px; z-index: 100; overflow: hidden; box-shadow: 0 0 30px rgba(255, 255, 0, 0.6), inset 0 0 20px rgba(255, 255, 0, 0.1); }
+    #critical-alert h3 { color: #ff0; font-size: 20px; margin-bottom: 15px; border-bottom: 3px solid #ff0; padding-bottom: 8px; animation: blink 1s infinite; letter-spacing: 1px; text-transform: uppercase; }
+    @keyframes blink { 0%, 50%, 100% { opacity: 1; } 25%, 75% { opacity: 0.5; } }
+    #critical-stats { display: flex; gap: 10px; margin-bottom: 15px; }
+    .critical-stat { flex: 1; background: rgba(255, 255, 0, 0.1); border: 1px solid #ff0; padding: 8px; text-align: center; }
+    .critical-stat-label { font-size: 10px; color: #ff0; opacity: 0.8; }
+    .critical-stat-value { font-size: 18px; color: #ff0; font-weight: bold; margin-top: 3px; }
+    #critical-log { height: 280px; overflow-y: auto; font-size: 13px; line-height: 1.8; }
+    .critical-entry { color: #ff0; margin-bottom: 10px; padding: 8px; border-left: 4px solid #ff0; background: rgba(255, 255, 0, 0.08); border-radius: 2px; }
+    .critical-entry.flash { animation: flashYellow 0.8s; }
+    
+    #category-legend-panel { position: absolute; bottom: 20px; right: 20px; width: 350px; min-height: 200px; background: rgba(0, 0, 0, 0.95); border: 3px solid #0f0; padding: 15px; z-index: 100; box-shadow: 0 0 30px rgba(0, 255, 0, 0.6), inset 0 0 20px rgba(0, 255, 0, 0.1); }
+    #category-legend-panel h3 { color: #0f0; font-size: 16px; margin-bottom: 15px; border-bottom: 3px solid #0f0; padding-bottom: 8px; letter-spacing: 1px; text-transform: uppercase; text-shadow: 0 0 10px #0f0; }
+    #legend-boxes { display: flex; flex-wrap: wrap; gap: 12px; justify-content: flex-start; align-items: flex-start; max-height: 400px; overflow-y: auto; }
+    .legend-box { width: 50px; height: 50px; border: 2px solid; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: bold; text-align: center; line-height: 1.2; padding: 4px; cursor: default; transition: all 0.3s; position: relative; }
+    .legend-box-label { font-size: 10px; margin-top: 5px; text-align: center; max-width: 70px; word-wrap: break-word; line-height: 1.2; }
+    .legend-info { font-size: 9px; opacity: 0.8; margin-top: 2px; text-align: center; }
+    @keyframes flashYellow { 
+      0% { background: rgba(255, 255, 0, 0.08); color: #ff0; transform: translateX(-5px); } 
+      25% { background: rgba(255, 255, 0, 0.5); color: #fff; transform: translateX(0); }
+      50% { background: rgba(255, 255, 0, 0.7); color: #f00; border-left-width: 6px; }
+      75% { background: rgba(255, 255, 0, 0.5); color: #fff; }
+      100% { background: rgba(255, 255, 0, 0.08); color: #ff0; transform: translateX(0); } 
+      // Add helper text at bottom of legend
+      const helperText = document.createElement('div');
+      helperText.style.width = '100%';
+      helperText.style.textAlign = 'center';
+      helperText.style.color = '#0f0';
+      helperText.style.fontSize = '10px';
+      helperText.style.marginTop = '15px';
+      helperText.style.opacity = '0.7';
+      helperText.style.borderTop = '1px solid #0f0';
+      helperText.style.paddingTop = '10px';
+      helperText.textContent = '📊 Numbers show connection counts';
+      legendBoxes.appendChild(helperText);
+    }
+    .critical-uid { color: #f00; font-weight: bold; font-size: 15px; }
+    .critical-type { color: #fff; font-weight: bold; font-size: 13px; }
+    .critical-time { color: #ff0; opacity: 0.8; font-size: 11px; }
+    .critical-desc { color: #0f0; font-size: 12px; margin-top: 5px; }
+    
+    #controls { position: absolute; top: 20px; left: 20px; background: rgba(0, 0, 0, 0.9); border: 2px solid #0f0; padding: 15px; z-index: 100; box-shadow: 0 0 20px rgba(0, 255, 0, 0.4); }
+    button { background: #000; color: #0f0; border: 1px solid #0f0; padding: 8px 15px; margin: 5px; cursor: pointer; font-family: 'Courier New', monospace; transition: all 0.2s; box-shadow: 0 0 10px rgba(0, 255, 0, 0.2); }
+    button:hover { background: #0f0; color: #000; box-shadow: 0 0 20px rgba(0, 255, 0, 0.6); }
+    button.active { background: #0f0; color: #000; font-weight: bold; box-shadow: 0 0 20px rgba(0, 255, 0, 0.8); }
+    #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 24px; text-align: center; z-index: 50; }
+    .spinner { border: 4px solid #111; border-top: 4px solid #0f0; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin: 20px auto; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    .category-legend { margin-top: 20px; padding: 15px; background: #111; border: 2px solid #0f0; max-height: 450px; overflow-y: auto; }
+    .legend-header { font-weight: bold; font-size: 16px; margin-bottom: 15px; border-bottom: 2px solid #0f0; padding-bottom: 8px; letter-spacing: 1px; }
+    .legend-item { display: flex; align-items: center; margin: 10px 0; font-size: 13px; padding: 8px; background: rgba(0, 255, 0, 0.05); }
+    .legend-item:hover { background: rgba(0, 255, 0, 0.15); }
+    .legend-color { width: 35px; height: 6px; margin-right: 12px; flex-shrink: 0; box-shadow: 0 0 5px currentColor; }
+    .legend-category { margin-top: 18px; margin-bottom: 8px; font-size: 14px; font-weight: bold; color: #0f0; text-transform: uppercase; border-left: 4px solid #0f0; padding-left: 10px; }
+    .legend-count { margin-left: auto; color: #0f0; opacity: 0.7; font-size: 12px; font-weight: bold; }
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: #111; }
+    ::-webkit-scrollbar-thumb { background: #0f0; border: 1px solid #000; }
+    #critical-log::-webkit-scrollbar-thumb { background: #ff0; }
+  </style>
+</head>
+<body>
+  <div id="ticker">
+    <div id="ticker-content">INITIALIZING DEMOGRAPHIC ANALYSIS SYSTEM...</div>
+    <div id="cycle-indicator" style="width: 0%;"></div>
+  </div>
+  <div id="container">
+    <div id="info-panel">
+      <h2>DEMOGRAPHIC ANALYSIS</h2>
+      <div id="stats">
+        <div class="stat-box"><div class="stat-label">CONNECTIONS</div><div class="stat-value" id="stat-connections">0</div></div>
+        <div class="stat-box"><div class="stat-label">CATEGORIES</div><div class="stat-value" id="stat-analyses">0</div></div>
+        <div class="stat-box"><div class="stat-label">PROGRESS</div><div class="stat-value" id="stat-progress">0/0</div></div>
+        <div class="stat-box"><div class="stat-label">GUESTS</div><div class="stat-value" id="stat-guests">0</div></div>
+      </div>
+      <div class="category-legend" id="legend"></div>
+    </div>
+    <div id="viz-panel">
+      <div id="controls">
+        <button id="btn-auto" class="active">AUTO</button>
+        <button id="btn-manual">MANUAL</button>
+      </div>
+      <canvas id="canvas"></canvas>
+      <div id="loading"><div class="spinner"></div>LOADING...</div>
+      <div id="critical-alert">
+        <h3>⚠️ CRITICAL VIOLATIONS</h3>
+        <div id="critical-stats">
+          <div class="critical-stat">
+            <div class="critical-stat-label">HIGH RISK</div>
+            <div class="critical-stat-value" id="critical-count">0</div>
+          </div>
+          <div class="critical-stat">
+            <div class="critical-stat-label">UNKNOWN HOST</div>
+            <div class="critical-stat-value" id="unknown-host-count">0</div>
+          </div>
+        </div>
+        <div id="critical-log"></div>
+      </div>
+      <div id="category-legend-panel">
+        <h3 id="legend-title">DEMOGRAPHIC GROUPS</h3>
+        <div id="legend-boxes"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    let guests = [], analyses = [], nodes = [], autoCycle = true;
+    let currentCycleIndex = 0, cycleTimer = null, cycleStartTime = 0;
+    let groupedAnalyses = {}, categoryGroups = [], subAnswerColors = {}, colorIndex = 0;
+    let animatedLines = [], towerAngle = -Math.PI / 4, towerScanDirection = 1;
+    let isAnimating = false, animationPhase = 'idle';
+    let dddViolations = [];
+    let criticalViolations = [], criticalAnimationIndex = 0, criticalAnimationTimer = null, currentCriticalUID = null;
+    const canvas = document.getElementById('canvas'), ctx = canvas.getContext('2d');
+    const CYCLE_INTERVAL = 20000;
+    const LINE_DRAW_TIME = 800;
+    const FADE_OUT_TIME = 500;
+    const CRITICAL_ANIMATION_SPEED = 3000;
+    const COLOR_PALETTE = ['rgba(255, 0, 0, 1)', 'rgba(255, 105, 180, 1)', 'rgba(255, 165, 0, 1)', 'rgba(255, 255, 0, 1)', 'rgba(0, 255, 0, 1)', 'rgba(0, 255, 127, 1)', 'rgba(0, 255, 255, 1)', 'rgba(0, 191, 255, 1)', 'rgba(138, 43, 226, 1)', 'rgba(255, 0, 255, 1)', 'rgba(255, 20, 147, 1)', 'rgba(255, 69, 0, 1)', 'rgba(173, 255, 47, 1)', 'rgba(0, 206, 209, 1)', 'rgba(147, 112, 219, 1)', 'rgba(255, 140, 0, 1)', 'rgba(50, 205, 50, 1)', 'rgba(255, 192, 203, 1)', 'rgba(64, 224, 208, 1)', 'rgba(238, 130, 238, 1)'];
+    window.clusterLabels = [];
+
+    function getSubAnswerColor(analysisType, value) {
+      const key = `${analysisType}_${value}`;
+      if (!subAnswerColors[key]) { subAnswerColors[key] = COLOR_PALETTE[colorIndex % COLOR_PALETTE.length]; colorIndex++; }
+      return subAnswerColors[key];
+    }
+
+    function init() {
+      setupCanvas();
+      setupControls();
+      loadData();
+      window.addEventListener('resize', () => { setupCanvas(); initializeNodes(); });
+    }
+
+    function setupCanvas() { canvas.width = canvas.offsetWidth; canvas.height = canvas.offsetHeight; }
+
+    function setupControls() {
+      document.getElementById('btn-auto').addEventListener('click', () => { autoCycle = true; document.getElementById('btn-auto').classList.add('active'); document.getElementById('btn-manual').classList.remove('active'); startCycle(); });
+      document.getElementById('btn-manual').addEventListener('click', () => { autoCycle = false; document.getElementById('btn-manual').classList.add('active'); document.getElementById('btn-auto').classList.remove('active'); stopCycle(); showAllConnections(); });
+    }
+
+    function loadData() {
+      if (typeof google !== 'undefined' && google.script && google.script.run) {
+        console.log('Loading LIVE data from Google Apps Script...');
+        
+        Promise.all([
+          new Promise((resolve) => { 
+            google.script.run
+              .withSuccessHandler(resolve)
+              .withFailureHandler((error) => { 
+                console.error('Failed to load wall data:', error); 
+                resolve([]); 
+              })
+              .getWallData(); 
+          }),
+          new Promise((resolve) => { 
+            google.script.run
+              .withSuccessHandler(resolve)
+              .withFailureHandler((error) => { 
+                console.error('Failed to load connections:', error); 
+                resolve({ analyses: [] }); 
+              })
+              .getDetailedWallConnections(); 
+          }),
+          new Promise((resolve) => { 
+            google.script.run
+              .withSuccessHandler(resolve)
+              .withFailureHandler((error) => { 
+                console.error('Failed to load violations:', error); 
+                resolve([]); 
+              })
+              .getDDDViolations(); 
+          })
+        ]).then(([guestData, connectionData, violationData]) => {
+          guests = guestData || []; 
+          analyses = connectionData.analyses || [];
+          dddViolations = violationData || [];
+          
+          console.log('✅ LIVE DATA Loaded:', guests.length, 'guests,', analyses.length, 'analyses,', dddViolations.length, 'violations');
+          
+          if (guests.length === 0) {
+            document.getElementById('loading').innerHTML = '<div style="color: #f00; font-size: 20px;">❌ NO DATA AVAILABLE<br><span style="font-size: 14px;">Please check your Google Apps Script functions</span></div>';
+            return;
+          }
+          
+          initializeVisualization();
+        }).catch(error => {
+          console.error('Error loading data:', error);
+          document.getElementById('loading').innerHTML = '<div style="color: #f00; font-size: 20px;">❌ ERROR LOADING DATA<br><span style="font-size: 14px;">' + error.message + '</span></div>';
+        });
+      } else {
+        console.error('⚠️ Not in Google Apps Script environment');
+        document.getElementById('loading').innerHTML = '<div style="color: #f00; font-size: 20px;">❌ NOT IN GOOGLE APPS SCRIPT<br><span style="font-size: 14px;">This visualization must run within Google Apps Script</span></div>';
+      }
+    }
+    
+    function initializeVisualization() {
+      console.log('Initializing visualization with:', guests.length, 'guests,', analyses.length, 'analyses,', dddViolations.length, 'violations');
+      processConnections(); 
+      initializeNodes(); 
+      updateStats(); 
+      updateLegend();
+      
+      // Initialize category legend panel
+      if (categoryGroups.length > 0) {
+        updateCategoryLegend(categoryGroups[0]);
+      }
+      
+      document.getElementById('loading').style.display = 'none';
+      
+      const criticalPanel = document.getElementById('critical-alert');
+      if (criticalPanel) {
+        criticalPanel.style.display = 'block';
+        console.log('Critical alert panel is visible');
+      }
+      
+      const legendPanel = document.getElementById('category-legend-panel');
+      if (legendPanel) {
+        legendPanel.style.display = 'block';
+        console.log('Category legend panel is visible');
+      }
+      
+      animate();
+      autoCycle = true;
+      document.getElementById('btn-auto').classList.add('active');
+      document.getElementById('btn-manual').classList.remove('active');
+      console.log('Starting auto-cycle with', categoryGroups.length, 'demographic categories');
+      console.log('Demographic categories:', categoryGroups.map(g => g.category).join(', '));
+      startCycle();
+      startCriticalAnimation();
+    }
+
+    function processConnections() {
+      // Filter to only demographic categories (exclude Gender and Sexual Orientation)
+      const demographicCategories = [
+        'AGE_RANGE', 'Age Range',
+        'EDUCATION_LEVEL', 'Education Level',
+        'SELF_IDENTIFIED_ETHNICITY', 'Self Identified Ethnicity', 'Ethnicity',
+        'EMPLOYMENT_INFORMATION_INDUSTRY', 'Employment Information (Industry)', 'Industry',
+        'EMPLOYMENT_INFORMATION_ROLE', 'Employment Information (Role)', 'Role'
+      ];
+      
+      analyses.forEach(analysis => {
+        const baseCategory = analysis.analysisType, traitValue = analysis.traitValue || 'unknown';
+        getSubAnswerColor(baseCategory, traitValue);
+        analysis.connections.forEach(conn => { conn.analysisType = baseCategory; conn.subAnswer = traitValue; conn.active = false; });
+      });
+      
+      groupedAnalyses = {}; 
+      analyses.forEach(analysis => {
+        const baseCategory = analysis.analysisType;
+        // Only include demographic categories
+        const isDemographic = demographicCategories.some(cat => 
+          baseCategory.toLowerCase().includes(cat.toLowerCase()) || 
+          cat.toLowerCase().includes(baseCategory.toLowerCase())
+        );
+        
+        if (isDemographic) {
+          if (!groupedAnalyses[baseCategory]) groupedAnalyses[baseCategory] = [];
+          groupedAnalyses[baseCategory].push(analysis);
+        }
+      });
+      
+      categoryGroups = Object.keys(groupedAnalyses).map(category => ({ category: category, analyses: groupedAnalyses[category] }));
+      
+      console.log('Filtered to', categoryGroups.length, 'demographic categories:', categoryGroups.map(g => g.category));
+    }
+
+    function initializeNodes() {
+      const w = canvas.width, h = canvas.height;
+      const boxW = 80, boxH = 30;
+      const margin = 100;
+      const towerSpace = 180;
+      const bottomPanelSpace = 300; // Space for bottom panels
+      const leftPanelSpace = 350; // Space for left panel
+      const rightPanelSpace = 380; // Space for right legend panel
+      
+      const usableWidth = w - margin - leftPanelSpace - rightPanelSpace;
+      const usableHeight = h - margin - towerSpace - bottomPanelSpace;
+      
+      // Calculate grid for better distribution
+      const minSpacing = 40;
+      const cols = Math.floor(usableWidth / (boxW + minSpacing));
+      const rows = Math.ceil(guests.length / cols);
+      
+      const cellW = usableWidth / cols;
+      const cellH = usableHeight / rows;
+      
+      console.log(`Grid: ${cols}x${rows} for ${guests.length} guests`);
+      
+      nodes = guests.map((guest, i) => {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        
+        // Base position in grid
+        const basePadding = 20;
+        const baseX = margin + leftPanelSpace + col * cellW + basePadding;
+        const baseY = margin + row * cellH + basePadding;
+        
+        // Add random offset within cell
+        const maxOffsetX = Math.max(0, cellW - boxW - basePadding * 2);
+        const maxOffsetY = Math.max(0, cellH - boxH - basePadding * 2);
+        
+        const x = baseX + Math.random() * maxOffsetX;
+        const y = baseY + Math.random() * maxOffsetY;
+        
+        const violationCount = dddViolations.filter(v => v.uid === guest.uid).length;
+        
+        return { 
+          uid: guest.uid, 
+          checkIn: guest.checkedAt, 
+          x: x, 
+          y: y, 
+          connections: [], 
+          isHub: false,
+          violationCount: violationCount,
+          isViolating: false,
+          isCritical: false,
+          fillColor: null,
+          clusterColor: null
+        };
+      });
+      
+      console.log('Initialized', nodes.length, 'nodes');
+    }
+
+    function startCriticalAnimation() {
+      console.log('Starting critical animation check with', dddViolations.length, 'total violations');
+      
+      const violationsByUID = {};
+      dddViolations.forEach(v => {
+        if (!violationsByUID[v.uid]) violationsByUID[v.uid] = [];
+        violationsByUID[v.uid].push(v);
+      });
+      
+      criticalViolations = [];
+      
+      Object.keys(violationsByUID).forEach(uid => {
+        if (violationsByUID[uid].length >= 5) {
+          console.log('Found UID with 5+ violations:', uid, violationsByUID[uid].length);
+          violationsByUID[uid].forEach(v => {
+            if (!criticalViolations.find(cv => cv.uid === v.uid && cv.type === v.type)) {
+              criticalViolations.push(v);
+            }
+          });
+        }
+      });
+      
+      dddViolations.forEach(v => {
+        const isUnknownHost = (v.type && v.type.toLowerCase().includes('unknown guest')) || 
+                              (v.type && v.type.toLowerCase().includes('do not know')) ||
+                              (v.type && v.type.toLowerCase().includes('dont know')) ||
+                              (v.description && v.description.toLowerCase().includes('do not know'));
+        
+        if (isUnknownHost) {
+          if (!criticalViolations.find(cv => cv.uid === v.uid && cv.type === v.type)) {
+            criticalViolations.push(v);
+          }
+        }
+      });
+      
+      if (criticalViolations.length === 0) {
+        console.log('No critical violations to display');
+        document.getElementById('critical-count').textContent = '0';
+        document.getElementById('unknown-host-count').textContent = '0';
+        document.getElementById('critical-log').innerHTML = '<div style="text-align: center; padding: 40px; opacity: 0.5;">No critical violations detected</div>';
+        return;
+      }
+      
+      console.log('Starting critical animation with', criticalViolations.length, 'critical violations');
+      
+      const unknownHostCount = criticalViolations.filter(v => 
+        v.type && (v.type.toLowerCase().includes('unknown') || v.type.toLowerCase().includes('do not know'))
+      ).length;
+      
+      document.getElementById('critical-count').textContent = criticalViolations.length;
+      document.getElementById('unknown-host-count').textContent = unknownHostCount;
+      
+      criticalAnimationIndex = 0;
+      
+      criticalAnimationTimer = setInterval(() => {
+        if (criticalAnimationIndex < criticalViolations.length) {
+          displayNextCriticalViolation();
+          criticalAnimationIndex++;
+        } else {
+          criticalAnimationIndex = 0;
+          document.getElementById('critical-log').innerHTML = '';
+          setTimeout(() => {
+            if (criticalAnimationIndex === 0 && criticalViolations.length > 0) {
+              displayNextCriticalViolation();
+              criticalAnimationIndex++;
+            }
+          }, 3000);
+        }
+      }, CRITICAL_ANIMATION_SPEED);
+      
+      displayNextCriticalViolation();
+      criticalAnimationIndex++;
+    }
+    
+    function displayNextCriticalViolation() {
+      const violation = criticalViolations[criticalAnimationIndex];
+      if (!violation) return;
+      
+      if (currentCriticalUID) {
+        const prevNode = nodes.find(n => n.uid === currentCriticalUID);
+        if (prevNode) prevNode.isCritical = false;
+      }
+      
+      currentCriticalUID = violation.uid;
+      const node = nodes.find(n => n.uid === violation.uid);
+      if (node) {
+        node.isCritical = true;
+        setTimeout(() => { node.isCritical = false; }, 2500);
+      }
+      
+      document.getElementById('critical-count').textContent = criticalViolations.length;
+      
+      const logEl = document.getElementById('critical-log');
+      const entry = document.createElement('div');
+      entry.className = 'critical-entry flash';
+      
+      const timestamp = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      
+      entry.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span class="critical-uid">${violation.uid}</span>
+          <span class="critical-time">${timestamp}</span>
+        </div>
+        <div class="critical-type">${violation.type}</div>
+        <div class="critical-desc">${violation.description || 'Critical security protocol breach'}</div>
+      `;
+      
+      logEl.appendChild(entry);
+      
+      setTimeout(() => {
+        logEl.scrollTop = logEl.scrollHeight;
+      }, 50);
+      
+      setTimeout(() => { entry.classList.remove('flash'); }, 800);
+    }
+
+    function startCycle() {
+      if (!autoCycle) return;
+      console.log('Starting cycle...');
+      stopCycle(); 
+      currentCycleIndex = 0; 
+      
+      if (categoryGroups.length > 0) {
+        cycleStartTime = Date.now();
+        activateCategoryGroup(categoryGroups[0]);
+        currentCycleIndex = 1;
+        updateStats();
+      }
+      
+      cycleTimer = setInterval(() => {
+        console.log('Cycle tick:', currentCycleIndex, 'of', categoryGroups.length);
+        cycleStartTime = Date.now();
+        
+        if (currentCycleIndex < categoryGroups.length) {
+          activateCategoryGroup(categoryGroups[currentCycleIndex]);
+          currentCycleIndex++;
+          updateStats();
+        } else {
+          currentCycleIndex = 0;
+          if (categoryGroups.length > 0) {
+            activateCategoryGroup(categoryGroups[0]);
+            currentCycleIndex = 1;
+            updateStats();
+          }
+        }
+      }, CYCLE_INTERVAL);
+    }
+
+    function stopCycle() { 
+      if (cycleTimer) { clearInterval(cycleTimer); cycleTimer = null; } 
+      cycleStartTime = 0;
+      document.getElementById('cycle-indicator').style.width = '0%';
+    }
+
+    function activateCategoryGroup(categoryGroup) {
+      const category = categoryGroup.category;
+      const categoryAnalyses = categoryGroup.analyses;
+      
+      // Get all OTHER categories for cross-referencing
+      const otherCategories = categoryGroups.filter(g => g.category !== category);
+      const otherCategoryNames = otherCategories.map(g => g.category.replace(/_/g, ' ')).join(', ');
+      
+      let totalConnections = 0;
+      const uniqueValues = new Set();
+      categoryAnalyses.forEach(analysis => { 
+        totalConnections += analysis.connections.length; 
+        uniqueValues.add(analysis.traitValue); 
+      });
+      
+      const tickerText = `CLUSTERED BY: ${category.replace(/_/g, ' ').toUpperCase()} [${uniqueValues.size} GROUPS] | CROSS-REFERENCING: ${otherCategoryNames.toUpperCase()}`;
+      document.getElementById('ticker-content').textContent = tickerText;
+      console.log('Clustering by:', category);
+      console.log('Cross-referencing:', otherCategoryNames);
+      
+      // Update legend to show cross-reference categories
+      updateCrossReferenceLegend(category, otherCategories);
+      
+      startAnimationSequence(categoryGroup, otherCategories);
+    }
+    
+    function updateCrossReferenceLegend(clusterCategory, otherCategories) {
+      const legendTitle = document.getElementById('legend-title');
+      const legendBoxes = document.getElementById('legend-boxes');
+      
+      legendTitle.textContent = `🔗 CROSS-REFERENCE CONNECTIONS`;
+      legendTitle.style.textShadow = '0 0 15px #0f0';
+      legendBoxes.innerHTML = '';
+      
+      // Add header showing what we're clustered by
+      const clusterHeader = document.createElement('div');
+      clusterHeader.style.width = '100%';
+      clusterHeader.style.textAlign = 'center';
+      clusterHeader.style.color = '#ff0';
+      clusterHeader.style.fontSize = '12px';
+      clusterHeader.style.fontWeight = 'bold';
+      clusterHeader.style.marginBottom = '15px';
+      clusterHeader.style.padding = '8px';
+      clusterHeader.style.border = '2px solid #ff0';
+      clusterHeader.style.boxShadow = '0 0 15px #ff0';
+      clusterHeader.textContent = `CLUSTERED BY: ${clusterCategory.replace(/_/g, ' ').toUpperCase()}`;
+      legendBoxes.appendChild(clusterHeader);
+      
+      // Show all cross-reference categories
+      otherCategories.forEach(otherCat => {
+        otherCat.analyses.forEach(analysis => {
+          const color = getSubAnswerColor(analysis.analysisType, analysis.traitValue);
+          const connCount = analysis.connections.length;
+          const uniqueGuests = new Set();
+          analysis.connections.forEach(conn => {
+            uniqueGuests.add(conn.uid1);
+            uniqueGuests.add(conn.uid2);
+          });
+          
+          const boxContainer = document.createElement('div');
+          boxContainer.style.display = 'flex';
+          boxContainer.style.flexDirection = 'column';
+          boxContainer.style.alignItems = 'center';
+          boxContainer.style.margin = '5px';
+          
+          const box = document.createElement('div');
+          box.className = 'legend-box';
+          box.style.backgroundColor = color.replace('1)', '0.3)');
+          box.style.borderColor = color;
+          box.style.color = '#fff';
+          box.style.boxShadow = `0 0 20px ${color}, inset 0 0 15px ${color.replace('1)', '0.2)')}`;
+          box.style.textShadow = `0 0 5px ${color}`;
+          box.title = `${analysis.traitValue} (${otherCat.category.replace(/_/g, ' ')})\n${connCount} connections across clusters`;
+          box.textContent = connCount;
+          
+          const label = document.createElement('div');
+          label.className = 'legend-box-label';
+          label.style.color = color;
+          label.style.textShadow = `0 0 8px ${color}`;
+          label.textContent = analysis.traitValue;
+          
+          const info = document.createElement('div');
+          info.className = 'legend-info';
+          info.style.color = color.replace('1)', '0.7)');
+          info.style.fontSize = '9px';
+          info.style.textAlign = 'center';
+          info.textContent = `${otherCat.category.replace(/_/g, ' ')}`;
+          
+          boxContainer.appendChild(box);
+          boxContainer.appendChild(label);
+          boxContainer.appendChild(info);
+          legendBoxes.appendChild(boxContainer);
+        });
+      });
+    }
+    
+    function updateCategoryLegend(categoryGroup) {
+      const legendTitle = document.getElementById('legend-title');
+      const legendBoxes = document.getElementById('legend-boxes');
+      
+      const categoryName = categoryGroup.category.replace(/_/g, ' ').toUpperCase();
+      legendTitle.textContent = '📊 ' + categoryName;
+      legendTitle.style.textShadow = '0 0 15px #0f0';
+      legendBoxes.innerHTML = '';
+      
+      if (categoryGroup.analyses.length === 0) {
+        legendBoxes.innerHTML = '<div style="color: #0f0; opacity: 0.5; text-align: center; width: 100%; padding: 20px;">No data for this category</div>';
+        return;
+      }
+      
+      // Sort by guest count (descending)
+      const sortedAnalyses = [...categoryGroup.analyses].sort((a, b) => {
+        const aGuests = new Set();
+        a.connections.forEach(conn => { aGuests.add(conn.uid1); aGuests.add(conn.uid2); });
+        const bGuests = new Set();
+        b.connections.forEach(conn => { bGuests.add(conn.uid1); bGuests.add(conn.uid2); });
+        return bGuests.size - aGuests.size;
+      });
+      
+      sortedAnalyses.forEach(analysis => {
+        const color = getSubAnswerColor(analysis.analysisType, analysis.traitValue);
+        const connCount = analysis.connections.length;
+        const uniqueGuests = new Set();
+        analysis.connections.forEach(conn => {
+          uniqueGuests.add(conn.uid1);
+          uniqueGuests.add(conn.uid2);
+        });
+        
+        const boxContainer = document.createElement('div');
+        boxContainer.style.display = 'flex';
+        boxContainer.style.flexDirection = 'column';
+        boxContainer.style.alignItems = 'center';
+        boxContainer.style.margin = '5px';
+        
+        const box = document.createElement('div');
+        box.className = 'legend-box';
+        box.style.backgroundColor = color.replace('1)', '0.3)');
+        box.style.borderColor = color;
+        box.style.color = '#fff';
+        box.style.boxShadow = `0 0 20px ${color}, inset 0 0 15px ${color.replace('1)', '0.2)')}`;
+        box.style.textShadow = `0 0 5px ${color}`;
+        box.title = `${uniqueGuests.size} guests in ${analysis.traitValue} group`;
+        box.textContent = uniqueGuests.size;
+        
+        const label = document.createElement('div');
+        label.className = 'legend-box-label';
+        label.style.color = color;
+        label.style.textShadow = `0 0 8px ${color}`;
+        label.textContent = analysis.traitValue;
+        
+        const info = document.createElement('div');
+        info.className = 'legend-info';
+        info.style.color = color.replace('1)', '0.7)');
+        info.textContent = `${connCount} connections`;
+        
+        boxContainer.appendChild(box);
+        boxContainer.appendChild(label);
+        boxContainer.appendChild(info);
+        legendBoxes.appendChild(boxContainer);
+      });
+    }
+
+    async function startAnimationSequence(categoryGroup, otherCategories) {
+      isAnimating = true;
+      animationPhase = 'fadeOut';
+      
+      await fadeOutLines();
+      
+      animatedLines = [];
+      nodes.forEach(n => { n.connections = []; n.isHub = false; });
+      
+      // Group nodes by the CLUSTERING demographic for positioning
+      const clusterMap = new Map();
+      categoryGroup.analyses.forEach(analysis => {
+        const demographicValue = analysis.traitValue;
+        const uidsInGroup = new Set();
+        analysis.connections.forEach(conn => {
+          uidsInGroup.add(conn.uid1);
+          uidsInGroup.add(conn.uid2);
+        });
+        clusterMap.set(demographicValue, {
+          uids: Array.from(uidsInGroup),
+          color: getSubAnswerColor(analysis.analysisType, demographicValue),
+          connections: analysis.connections
+        });
+      });
+      
+      // Reposition nodes into demographic clusters
+      repositionNodesByClusters(clusterMap);
+      
+      console.log('Clustered by:', categoryGroup.category);
+      clusterMap.forEach((data, value) => {
+        console.log(`  ${value}: ${data.uids.length} guests`);
+      });
+      
+      // Now draw connections from OTHER categories (cross-reference)
+      const crossRefGroups = {};
+      otherCategories.forEach(otherCat => {
+        otherCat.analyses.forEach(analysis => {
+          const color = getSubAnswerColor(analysis.analysisType, analysis.traitValue);
+          const uids = new Set();
+          analysis.connections.forEach(conn => {
+            uids.add(conn.uid1);
+            uids.add(conn.uid2);
+          });
+          
+          if (uids.size > 0) {
+            const key = `${otherCat.category}_${analysis.traitValue}`;
+            crossRefGroups[key] = {
+              color: color,
+              uids: Array.from(uids),
+              connections: analysis.connections,
+              category: otherCat.category,
+              value: analysis.traitValue
+            };
+          }
+        });
+      });
+      
+      console.log('Cross-referencing', Object.keys(crossRefGroups).length, 'groups from other categories');
+      
+      animationPhase = 'drawing';
+      const towerX = canvas.width / 2, towerY = canvas.height - 100;
+      
+      let delay = 0;
+      Object.values(crossRefGroups).forEach((group, groupIndex) => {
+        if (group.uids.length === 0) return;
+        
+        const hubUid = group.uids[0];
+        const hubNode = nodes.find(n => n.uid === hubUid);
+        if (!hubNode) return;
+        
+        hubNode.isHub = true;
+        
+        if (!hubNode.fillColor) {
+          hubNode.fillColor = group.color;
+        }
+        
+        setTimeout(() => {
+          animatedLines.push({
+            type: 'tower-to-hub',
+            x1: towerX, y1: towerY,
+            x2: hubNode.x + 40, y2: hubNode.y + 15,
+            color: group.color,
+            progress: 0,
+            startTime: Date.now()
+          });
+        }, delay);
+        
+        delay += LINE_DRAW_TIME + 100;
+        
+        group.uids.forEach((uid, i) => {
+          if (uid === hubUid) return;
+          const targetNode = nodes.find(n => n.uid === uid);
+          if (!targetNode) return;
+          
+          setTimeout(() => {
+            animatedLines.push({
+              type: 'hub-to-node',
+              x1: hubNode.x + 40, y1: hubNode.y + 15,
+              x2: targetNode.x + 40, y2: targetNode.y + 15,
+              color: group.color,
+              progress: 0,
+              startTime: Date.now(),
+              is90Degree: true
+            });
+            targetNode.connections.push({ color: group.color });
+            
+            if (!targetNode.fillColor) {
+              targetNode.fillColor = group.color;
+            }
+          }, delay + (i * 100));
+        });
+        
+        delay += group.uids.length * 100 + 200;
+      });
+      
+      setTimeout(() => {
+        animationPhase = 'complete';
+        const category = categoryGroup.category;
+        document.getElementById('ticker-content').textContent = `CLUSTERING BY ${category.replace(/_/g, ' ').toUpperCase()} COMPLETE`;
+        setTimeout(() => {
+          if (autoCycle) {
+            isAnimating = false;
+          }
+        }, 2000);
+      }, delay + 1000);
+    }
+    
+    function repositionNodesByClusters(demographicMap) {
+      const w = canvas.width, h = canvas.height;
+      const boxW = 80, boxH = 30;
+      const margin = 100;
+      const towerSpace = 180;
+      const bottomPanelSpace = 300;
+      const leftPanelSpace = 350;
+      const rightPanelSpace = 380;
+      
+      const usableWidth = w - margin - leftPanelSpace - rightPanelSpace;
+      const usableHeight = h - margin - towerSpace - bottomPanelSpace;
+      
+      const clusters = Array.from(demographicMap.entries());
+      const numClusters = clusters.length;
+      
+      // Arrange clusters in a grid
+      const cols = Math.ceil(Math.sqrt(numClusters));
+      const rows = Math.ceil(numClusters / cols);
+      
+      const clusterW = usableWidth / cols;
+      const clusterH = usableHeight / rows;
+      
+      // Store cluster info for rendering labels
+      window.clusterLabels = [];
+      
+      clusters.forEach(([demographicValue, data], clusterIndex) => {
+        const clusterCol = clusterIndex % cols;
+        const clusterRow = Math.floor(clusterIndex / cols);
+        
+        const clusterX = margin + leftPanelSpace + clusterCol * clusterW;
+        const clusterY = margin + clusterRow * clusterH;
+        
+        // Store cluster label info
+        window.clusterLabels.push({
+          x: clusterX + clusterW / 2,
+          y: clusterY + 15,
+          label: demographicValue,
+          color: data.color,
+          bounds: { x: clusterX, y: clusterY, w: clusterW, h: clusterH }
+        });
+        
+        // Position nodes within this cluster
+        const nodesInCluster = data.uids.map(uid => nodes.find(n => n.uid === uid)).filter(n => n);
+        const nodesPerRow = Math.ceil(Math.sqrt(nodesInCluster.length));
+        
+        nodesInCluster.forEach((node, i) => {
+          const nodeCol = i % nodesPerRow;
+          const nodeRow = Math.floor(i / nodesPerRow);
+          
+          const cellW = (clusterW - 60) / nodesPerRow;
+          const cellH = (clusterH - 60) / Math.ceil(nodesInCluster.length / nodesPerRow);
+          
+          node.x = clusterX + 30 + nodeCol * cellW + Math.random() * (cellW - boxW);
+          node.y = clusterY + 40 + nodeRow * cellH + Math.random() * (cellH - boxH);
+          
+          // Ensure within bounds
+          node.x = Math.max(margin + leftPanelSpace + 10, Math.min(w - margin - rightPanelSpace - boxW - 10, node.x));
+          node.y = Math.max(margin + 30, Math.min(h - towerSpace - bottomPanelSpace - boxH - 10, node.y));
+          
+          // Set cluster color
+          node.clusterColor = data.color;
+        });
+      });
+      
+      console.log('Repositioned nodes into', numClusters, 'demographic clusters with labels');
+    }
+
+    async function fadeOutLines() {
+      return new Promise(resolve => {
+        const fadeStart = Date.now();
+        const fadeInterval = setInterval(() => {
+          const elapsed = Date.now() - fadeStart;
+          if (elapsed >= FADE_OUT_TIME) {
+            animatedLines = [];
+            window.clusterLabels = [];
+            clearInterval(fadeInterval);
+            resolve();
+          }
+        }, 16);
+      });
+    }
+
+    function showAllConnections() {
+      isAnimating = false;
+      animationPhase = 'manual';
+      animatedLines = [];
+      nodes.forEach(n => { n.connections = []; n.isHub = false; });
+      
+      const towerX = canvas.width / 2, towerY = canvas.height - 100;
+      
+      analyses.forEach(analysis => {
+        const color = getSubAnswerColor(analysis.analysisType, analysis.traitValue);
+        analysis.connections.forEach(conn => {
+          const node1 = nodes.find(n => n.uid === conn.uid1);
+          const node2 = nodes.find(n => n.uid === conn.uid2);
+          if (node1 && node2) {
+            animatedLines.push({
+              type: 'static',
+              x1: towerX, y1: towerY,
+              x2: node1.x + 40, y2: node1.y + 15,
+              color: color,
+              progress: 1,
+              startTime: 0
+            });
+            node1.connections.push({ color: color });
+            node2.connections.push({ color: color });
+          }
+        });
+      });
+      
+      document.getElementById('ticker-content').textContent = 'SHOWING ALL DEMOGRAPHIC CONNECTIONS - MANUAL MODE';
+    }
+
+    function updateStats() {
+      const totalConnections = analyses.reduce((sum, a) => sum + a.connections.length, 0);
+      document.getElementById('stat-connections').textContent = totalConnections;
+      document.getElementById('stat-analyses').textContent = categoryGroups.length;
+      document.getElementById('stat-progress').textContent = `${currentCycleIndex}/${categoryGroups.length}`;
+      document.getElementById('stat-guests').textContent = guests.length;
+      
+      // Update current clustering info if available
+      if (currentCycleIndex > 0 && currentCycleIndex <= categoryGroups.length) {
+        const currentCategory = categoryGroups[currentCycleIndex - 1];
+        const clusteringText = `CLUSTERED BY: ${currentCategory.category.replace(/_/g, ' ')}`;
+        document.getElementById('stat-progress').setAttribute('title', clusteringText);
+      }
+    }
+
+    function updateLegend() {
+      const legendEl = document.getElementById('legend');
+      let html = '<div class="legend-header">🎨 DEMOGRAPHIC CATEGORIES</div>';
+      
+      if (categoryGroups.length === 0) {
+        html += '<div style="color: #f00; padding: 10px;">No demographic data available</div>';
+      }
+      
+      categoryGroups.forEach(group => {
+        const totalConnections = group.analyses.reduce((sum, a) => sum + a.connections.length, 0);
+        const allGuests = new Set();
+        group.analyses.forEach(a => {
+          a.connections.forEach(conn => {
+            allGuests.add(conn.uid1);
+            allGuests.add(conn.uid2);
+          });
+        });
+        
+        html += `<div class="legend-category">${group.category.replace(/_/g, ' ')} (${group.analyses.length} groups, ${allGuests.size} guests)</div>`;
+        
+        group.analyses.forEach(analysis => {
+          const color = getSubAnswerColor(analysis.analysisType, analysis.traitValue);
+          const connCount = analysis.connections.length;
+          const uniqueGuests = new Set();
+          analysis.connections.forEach(conn => {
+            uniqueGuests.add(conn.uid1);
+            uniqueGuests.add(conn.uid2);
+          });
+          
+          html += `
+            <div class="legend-item">
+              <div class="legend-color" style="background: ${color};"></div>
+              <span>${analysis.traitValue}</span>
+              <span class="legend-count">${uniqueGuests.size} · ${connCount}</span>
+            </div>
+          `;
+        });
+      });
+      
+      legendEl.innerHTML = html;
+    }
+
+    function animate() { 
+      if (autoCycle && cycleStartTime > 0 && animationPhase !== 'manual') {
+        const elapsed = Date.now() - cycleStartTime;
+        const progress = Math.min(100, (elapsed / CYCLE_INTERVAL) * 100);
+        document.getElementById('cycle-indicator').style.width = progress + '%';
+      }
+      
+      if (animationPhase === 'drawing') {
+        towerAngle += 0.02 * towerScanDirection;
+        if (towerAngle > Math.PI / 4 || towerAngle < -Math.PI / 4) {
+          towerScanDirection *= -1;
+        }
+      }
+      
+      const now = Date.now();
+      animatedLines.forEach(line => {
+        if (line.progress < 1) {
+          const elapsed = now - line.startTime;
+          line.progress = Math.min(1, elapsed / LINE_DRAW_TIME);
+        }
+      });
+      
+      render(); 
+      requestAnimationFrame(animate); 
+    }
+
+    function render() {
+      // Tron-style dark background
+      ctx.fillStyle = '#000'; 
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      // Draw cluster labels and boundaries
+      if (window.clusterLabels && window.clusterLabels.length > 0 && animationPhase !== 'idle') {
+        window.clusterLabels.forEach(cluster => {
+          // Draw cluster boundary with subtle background
+          ctx.fillStyle = cluster.color.replace('1)', '0.05)');
+          ctx.fillRect(cluster.bounds.x, cluster.bounds.y, cluster.bounds.w, cluster.bounds.h);
+          
+          // Draw glowing border
+          ctx.shadowColor = cluster.color;
+          ctx.shadowBlur = 10;
+          ctx.strokeStyle = cluster.color.replace('1)', '0.5)');
+          ctx.lineWidth = 3;
+          ctx.setLineDash([15, 10]);
+          ctx.strokeRect(cluster.bounds.x, cluster.bounds.y, cluster.bounds.w, cluster.bounds.h);
+          ctx.setLineDash([]);
+          ctx.shadowBlur = 0;
+          
+          // Draw cluster label with background box
+          const labelText = cluster.label.toUpperCase();
+          ctx.font = 'bold 16px "Courier New"';
+          ctx.textAlign = 'center';
+          const labelWidth = ctx.measureText(labelText).width;
+          const labelPadding = 15;
+          const labelBoxW = labelWidth + labelPadding * 2;
+          const labelBoxH = 30;
+          const labelX = cluster.x - labelBoxW / 2;
+          const labelY = cluster.y - 25;
+          
+          // Label background with glow
+          ctx.shadowColor = cluster.color;
+          ctx.shadowBlur = 20;
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.95)';
+          ctx.strokeStyle = cluster.color;
+          ctx.lineWidth = 2;
+          ctx.fillRect(labelX, labelY, labelBoxW, labelBoxH);
+          ctx.strokeRect(labelX, labelY, labelBoxW, labelBoxH);
+          ctx.shadowBlur = 0;
+          
+          // Label text with glow
+          ctx.shadowColor = cluster.color;
+          ctx.shadowBlur = 15;
+          ctx.fillStyle = cluster.color;
+          ctx.textBaseline = 'middle';
+          ctx.fillText(labelText, cluster.x, labelY + labelBoxH / 2);
+          ctx.shadowBlur = 0;
+        });
+      }
+      
+      const towerX = canvas.width / 2, towerY = canvas.height - 100;
+      const towerW = 200, towerH = 80;
+      
+      // Tron-style tower with glow
+      ctx.shadowColor = '#0f0';
+      ctx.shadowBlur = 20;
+      ctx.fillStyle = '#0a0a0a';
+      ctx.strokeStyle = '#0f0'; 
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(towerX, towerY, towerW / 2, 0, Math.PI, true);
+      ctx.lineTo(towerX - towerW / 2, towerY + towerH);
+      ctx.lineTo(towerX + towerW / 2, towerY + towerH);
+      ctx.closePath();
+      ctx.fill(); 
+      ctx.stroke();
+      
+      // Second glow layer
+      ctx.shadowBlur = 10;
+      ctx.stroke();
+      
+      ctx.shadowBlur = 0;
+      
+      if (animationPhase === 'drawing') {
+        ctx.save();
+        ctx.translate(towerX, towerY);
+        ctx.rotate(towerAngle);
+        
+        // Tron-style scanning beam with glow
+        ctx.shadowColor = 'rgba(0, 255, 0, 0.8)';
+        ctx.shadowBlur = 30;
+        ctx.strokeStyle = 'rgba(0, 255, 0, 0.3)';
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(0, -canvas.height);
+        ctx.stroke();
+        
+        ctx.shadowBlur = 15;
+        ctx.strokeStyle = 'rgba(0, 255, 0, 0.6)';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(0, -canvas.height);
+        ctx.stroke();
+        
+        ctx.shadowBlur = 0;
+        ctx.restore();
+      }
+      
+      // Tron-style glowing text
+      ctx.shadowColor = '#0f0';
+      ctx.shadowBlur = 10;
+      ctx.fillStyle = '#0f0';
+      ctx.font = 'bold 14px "Courier New"';
+      ctx.textAlign = 'center';
+      ctx.fillText('ANALYSIS', towerX, towerY + 30);
+      ctx.font = '10px "Courier New"';
+      ctx.fillText('TOWER', towerX, towerY + 45);
+      ctx.shadowBlur = 0;
+      
+      animatedLines.forEach(line => {
+        const currentProgress = line.progress;
+        
+        ctx.lineWidth = line.type === 'hub-to-node' ? 2 : 1.5;
+        
+        // Draw path
+        ctx.beginPath();
+        
+        if (line.is90Degree && currentProgress > 0) {
+          const currentX2 = line.x1 + (line.x2 - line.x1) * currentProgress;
+          const currentY2 = line.y1 + (line.y2 - line.y1) * currentProgress;
+          const midX = (line.x1 + line.x2) / 2;
+          
+          ctx.moveTo(line.x1, line.y1);
+          
+          if (currentProgress < 0.33) {
+            const partialX = line.x1 + (midX - line.x1) * (currentProgress / 0.33);
+            ctx.lineTo(partialX, line.y1);
+          } else if (currentProgress < 0.66) {
+            ctx.lineTo(midX, line.y1);
+            const partialY = line.y1 + (currentY2 - line.y1) * ((currentProgress - 0.33) / 0.33);
+            ctx.lineTo(midX, partialY);
+          } else {
+            ctx.lineTo(midX, line.y1);
+            ctx.lineTo(midX, currentY2);
+            ctx.lineTo(currentX2, currentY2);
+          }
+        } else {
+          const currentX2 = line.x1 + (line.x2 - line.x1) * currentProgress;
+          const currentY2 = line.y1 + (line.y2 - line.y1) * currentProgress;
+          ctx.moveTo(line.x1, line.y1);
+          ctx.lineTo(currentX2, currentY2);
+        }
+        
+        // Tron-style glow effect - multiple shadow layers
+        ctx.shadowColor = line.color;
+        ctx.shadowBlur = 20;
+        ctx.strokeStyle = line.color.replace('1)', '0.3)');
+        ctx.stroke();
+        
+        ctx.shadowBlur = 10;
+        ctx.strokeStyle = line.color.replace('1)', '0.6)');
+        ctx.stroke();
+        
+        ctx.shadowBlur = 5;
+        ctx.strokeStyle = line.color;
+        ctx.stroke();
+        
+        ctx.shadowBlur = 0;
+        
+        // Draw endpoint glow
+        if (currentProgress > 0.5) {
+          const endX = line.is90Degree ? (currentProgress < 0.66 ? (line.x1 + line.x2) / 2 : line.x1 + (line.x2 - line.x1) * currentProgress) : line.x1 + (line.x2 - line.x1) * currentProgress;
+          const endY = line.is90Degree ? (currentProgress < 0.33 ? line.y1 : (currentProgress < 0.66 ? line.y1 + (line.y2 - line.y1) * currentProgress : line.y1 + (line.y2 - line.y1) * currentProgress)) : line.y1 + (line.y2 - line.y1) * currentProgress;
+          
+          ctx.shadowColor = line.color;
+          ctx.shadowBlur = 15;
+          ctx.fillStyle = line.color;
+          ctx.beginPath();
+          ctx.arc(endX, endY, 4, 0, Math.PI * 2);
+          ctx.fill();
+          
+          ctx.shadowBlur = 0;
+        }
+      });
+      
+      nodes.forEach(node => {
+        const boxW = 80, boxH = 30;
+        const hasConnections = node.connections.length > 0;
+        const isHub = node.isHub;
+        const isViolating = node.isViolating;
+        const isCritical = node.isCritical;
+        
+        let borderColor = 'rgba(0, 255, 0, 0.3)';
+        let bgColor = '#000';
+        let glowIntensity = 0;
+        let borderWidth = 1;
+        
+        if (isCritical) {
+          borderColor = '#ff0';
+          bgColor = 'rgba(255, 255, 0, 0.2)';
+          glowIntensity = 20;
+          borderWidth = 10;
+        } else if (isViolating) {
+          borderColor = '#f00';
+          bgColor = 'rgba(255, 0, 0, 0.2)';
+          glowIntensity = 15;
+          borderWidth = 4;
+        } else if (isHub) {
+          borderColor = '#ff0';
+          bgColor = node.fillColor || '#0f0';
+          borderWidth = 3;
+        } else if (hasConnections && node.fillColor) {
+          borderColor = node.fillColor;
+          bgColor = node.fillColor;
+          borderWidth = 2;
+        } else if (hasConnections) {
+          borderColor = '#0f0';
+          bgColor = '#000';
+          borderWidth = 2;
+        }
+        
+        if (isCritical || isViolating) {
+          ctx.shadowColor = isCritical ? '#ff0' : '#f00';
+          ctx.shadowBlur = glowIntensity;
+          ctx.fillStyle = bgColor;
+          ctx.fillRect(node.x - 2, node.y - 2, boxW + 4, boxH + 4);
+          ctx.shadowBlur = 0;
+        }
+        
+        // Tron-style glow on boxes with connections
+        if (hasConnections && node.fillColor && !isCritical && !isViolating) {
+          ctx.shadowColor = node.fillColor;
+          ctx.shadowBlur = 10;
+        } else if (isHub && !isCritical) {
+          ctx.shadowColor = '#ff0';
+          ctx.shadowBlur = 15;
+        }
+        
+        ctx.fillStyle = bgColor;
+        ctx.strokeStyle = borderColor;
+        ctx.lineWidth = borderWidth;
+        ctx.fillRect(node.x, node.y, boxW, boxH);
+        ctx.strokeRect(node.x, node.y, boxW, boxH);
+        
+        ctx.shadowBlur = 0;
+        
+        if (isCritical) {
+          ctx.strokeStyle = 'rgba(255, 255, 0, 0.5)';
+          ctx.lineWidth = 12;
+          ctx.strokeRect(node.x - 1, node.y - 1, boxW + 2, boxH + 2);
+        } else if (isViolating) {
+          ctx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
+          ctx.lineWidth = 6;
+          ctx.strokeRect(node.x - 1, node.y - 1, boxW + 2, boxH + 2);
+        }
+        
+        let textColor = '#0f0';
+        if (isHub && node.fillColor) {
+          textColor = '#000';
+        } else if (hasConnections && node.fillColor) {
+          textColor = '#000';
+        } else if (isCritical) {
+          textColor = '#ff0';
+        } else if (isViolating) {
+          textColor = '#f00';
+        }
+        
+        ctx.fillStyle = textColor;
+        ctx.font = (hasConnections || isHub || isViolating || isCritical) ? 'bold 11px "Courier New"' : '11px "Courier New"';
+        ctx.textAlign = 'left';
+        ctx.fillText(node.uid, node.x + 4, node.y + 14);
+        
+        ctx.font = '9px "Courier New"';
+        ctx.fillStyle = textColor;
+        ctx.fillText(node.checkIn, node.x + 4, node.y + 25);
+        
+        if (node.violationCount > 0) {
+          const badgeSize = 18;
+          const badgeX = node.x + boxW - badgeSize - 2;
+          const badgeY = node.y + 2;
+          
+          ctx.shadowColor = isCritical ? '#ff0' : '#f00';
+          ctx.shadowBlur = isCritical ? 10 : (isViolating ? 8 : 4);
+          ctx.fillStyle = isCritical ? '#ffff00' : (isViolating ? '#ff0000' : '#cc0000');
+          ctx.fillRect(badgeX, badgeY, badgeSize, 14);
+          ctx.shadowBlur = 0;
+          
+          ctx.strokeStyle = '#000';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(badgeX, badgeY, badgeSize, 14);
+          
+          ctx.fillStyle = isCritical ? '#000' : '#fff';
+          ctx.font = 'bold 10px "Courier New"';
+          ctx.textAlign = 'center';
+          ctx.fillText(node.violationCount.toString(), badgeX + badgeSize / 2, badgeY + 10);
+        }
+      });
+    }
+
+    init();
+  </script>
+</body>
+</html>
