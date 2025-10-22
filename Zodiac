@@ -1,0 +1,394 @@
+/**
+ * ============================================================================
+ * ADD ZODIAC SIGNS TO FORM RESPONSES 1 - AUTO TRIGGER VERSION
+ * ============================================================================
+ * 
+ * PURPOSE:
+ * Automatically calculates zodiac signs from Birthday (MM/DD) and adds them 
+ * to Column U of the "Form Responses 1" sheet
+ * 
+ * SETUP INSTRUCTIONS:
+ * 1. Open your Google Sheet
+ * 2. Go to Extensions > Apps Script
+ * 3. Paste this code
+ * 4. Click Save (💾 icon)
+ * 5. Run setupTrigger() function once to install the automatic trigger
+ * 6. Grant permissions when prompted
+ * 
+ * HOW IT WORKS:
+ * - Runs automatically when the sheet is edited
+ * - Only processes rows that have a timestamp in Column A
+ * - Only processes rows where Column U is empty
+ * - Runs silently without popup messages
+ * 
+ * REQUIREMENTS:
+ * - "Form Responses 1" sheet must exist
+ * - Column A must contain timestamps
+ * - Birthday (MM/DD) data must be in Column C
+ * - Column U will be used for "Zodiac Sign"
+ * ============================================================================
+ */
+
+/**
+ * AUTO-TRIGGER FUNCTION - Runs on every edit
+ * This function runs automatically and silently
+ */
+function onEdit(e) {
+  addZodiacToFormResponses();
+}
+
+/**
+ * Main function to add zodiac signs to Form Responses 1
+ * Now runs silently without alerts
+ */
+function addZodiacToFormResponses() {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName('Form Responses 1');
+    
+    if (!sheet) {
+      Logger.log('Error: "Form Responses 1" sheet not found!');
+      return;
+    }
+    
+    const data = sheet.getDataRange().getValues();
+    
+    if (data.length < 2) {
+      Logger.log('No data found in the sheet.');
+      return;
+    }
+    
+    const headers = data[0];
+    
+    // Column A is timestamp (index 0)
+    const timestampCol = 0;
+    
+    // Find the Birthday column (should be column C, index 2)
+    let birthdayCol = -1;
+    for (let i = 0; i < headers.length; i++) {
+      if (headers[i].toString().toLowerCase().includes('birthday')) {
+        birthdayCol = i;
+        break;
+      }
+    }
+    
+    if (birthdayCol === -1) {
+      Logger.log('Error: Birthday column not found!');
+      return;
+    }
+    
+    // Column U is index 20 (0-indexed)
+    const zodiacCol = 20;
+    
+    // Set header for Column U if not already set
+    if (!headers[zodiacCol] || headers[zodiacCol] !== 'Zodiac Sign') {
+      sheet.getRange(1, zodiacCol + 1).setValue('Zodiac Sign');
+    }
+    
+    Logger.log(`Processing zodiac signs for rows with timestamps...`);
+    
+    // Process each row (skip header)
+    let successCount = 0;
+    let skippedCount = 0;
+    
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      const timestamp = row[timestampCol];
+      const birthday = row[birthdayCol];
+      const existingZodiac = row[zodiacCol];
+      
+      // REQUIREMENT: Must have value in Column A (timestamp)
+      if (!timestamp) {
+        skippedCount++;
+        continue;
+      }
+      
+      // Skip if zodiac already exists
+      if (existingZodiac) {
+        continue;
+      }
+      
+      // Skip if no birthday
+      if (!birthday) {
+        continue;
+      }
+      
+      const zodiac = getZodiacSign(birthday);
+      
+      if (zodiac) {
+        // Write zodiac to Column U (zodiacCol + 1 because getRange is 1-indexed)
+        sheet.getRange(i + 1, zodiacCol + 1).setValue(zodiac);
+        successCount++;
+      }
+    }
+    
+    // Log results silently (no popup)
+    if (successCount > 0) {
+      Logger.log(`✅ Added ${successCount} zodiac signs`);
+    }
+    if (skippedCount > 0) {
+      Logger.log(`⏭️ Skipped ${skippedCount} rows without timestamps`);
+    }
+    
+  } catch (error) {
+    Logger.log('Error in addZodiacToFormResponses: ' + error.toString());
+  }
+}
+
+/**
+ * Calculate zodiac sign from birthday
+ * @param {string|Date} birthday - Birthday in MM/DD format or Date object
+ * @return {string} Zodiac sign name
+ */
+function getZodiacSign(birthday) {
+  try {
+    let month, day;
+    
+    // Handle different input types
+    if (birthday instanceof Date) {
+      month = birthday.getMonth() + 1; // getMonth() is 0-indexed
+      day = birthday.getDate();
+    } else {
+      // Parse MM/DD string
+      const dateStr = birthday.toString().trim();
+      
+      // Try to match MM/DD format
+      const parts = dateStr.split('/');
+      if (parts.length >= 2) {
+        month = parseInt(parts[0], 10);
+        day = parseInt(parts[1], 10);
+      } else {
+        // Try to parse as Date
+        const parsed = new Date(dateStr);
+        if (!isNaN(parsed.getTime())) {
+          month = parsed.getMonth() + 1;
+          day = parsed.getDate();
+        } else {
+          return null;
+        }
+      }
+    }
+    
+    // Validate month and day
+    if (isNaN(month) || isNaN(day) || month < 1 || month > 12 || day < 1 || day > 31) {
+      return null;
+    }
+    
+    // Zodiac sign calculation based on month and day
+    if ((month == 3 && day >= 21) || (month == 4 && day <= 19)) {
+      return 'Aries';
+    } else if ((month == 4 && day >= 20) || (month == 5 && day <= 20)) {
+      return 'Taurus';
+    } else if ((month == 5 && day >= 21) || (month == 6 && day <= 20)) {
+      return 'Gemini';
+    } else if ((month == 6 && day >= 21) || (month == 7 && day <= 22)) {
+      return 'Cancer';
+    } else if ((month == 7 && day >= 23) || (month == 8 && day <= 22)) {
+      return 'Leo';
+    } else if ((month == 8 && day >= 23) || (month == 9 && day <= 22)) {
+      return 'Virgo';
+    } else if ((month == 9 && day >= 23) || (month == 10 && day <= 22)) {
+      return 'Libra';
+    } else if ((month == 10 && day >= 23) || (month == 11 && day <= 21)) {
+      return 'Scorpio';
+    } else if ((month == 11 && day >= 22) || (month == 12 && day <= 21)) {
+      return 'Sagittarius';
+    } else if ((month == 12 && day >= 22) || (month == 1 && day <= 19)) {
+      return 'Capricorn';
+    } else if ((month == 1 && day >= 20) || (month == 2 && day <= 18)) {
+      return 'Aquarius';
+    } else if ((month == 2 && day >= 19) || (month == 3 && day <= 20)) {
+      return 'Pisces';
+    }
+    
+    return null;
+  } catch (e) {
+    Logger.log('Error parsing birthday: ' + birthday + ' - ' + e.toString());
+    return null;
+  }
+}
+
+/**
+ * Helper function to test zodiac calculation
+ * Run this to verify the zodiac calculator works correctly
+ */
+function testZodiacCalculation() {
+  const testCases = [
+    { birthday: '03/21', expected: 'Aries' },
+    { birthday: '04/20', expected: 'Taurus' },
+    { birthday: '05/21', expected: 'Gemini' },
+    { birthday: '06/21', expected: 'Cancer' },
+    { birthday: '07/23', expected: 'Leo' },
+    { birthday: '08/23', expected: 'Virgo' },
+    { birthday: '09/23', expected: 'Libra' },
+    { birthday: '10/23', expected: 'Scorpio' },
+    { birthday: '11/22', expected: 'Sagittarius' },
+    { birthday: '12/22', expected: 'Capricorn' },
+    { birthday: '01/20', expected: 'Aquarius' },
+    { birthday: '02/19', expected: 'Pisces' }
+  ];
+  
+  Logger.log('Testing Zodiac Calculation...');
+  let passed = 0;
+  let failed = 0;
+  
+  testCases.forEach(test => {
+    const result = getZodiacSign(test.birthday);
+    if (result === test.expected) {
+      Logger.log(`✅ PASS: ${test.birthday} = ${result}`);
+      passed++;
+    } else {
+      Logger.log(`❌ FAIL: ${test.birthday} expected ${test.expected}, got ${result}`);
+      failed++;
+    }
+  });
+  
+  Logger.log(`\nTest Results: ${passed} passed, ${failed} failed`);
+}
+
+/**
+ * Setup the automatic trigger (run this once)
+ * This installs a time-based trigger that runs every minute
+ */
+function setupTrigger() {
+  // Delete existing triggers to avoid duplicates
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(trigger => {
+    if (trigger.getHandlerFunction() === 'addZodiacToFormResponses') {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+  
+  // Create a new time-based trigger that runs every minute
+  ScriptApp.newTrigger('addZodiacToFormResponses')
+    .timeBased()
+    .everyMinutes(1)
+    .create();
+  
+  Logger.log('✅ Automatic trigger installed! Zodiac signs will be added every minute for new entries.');
+  SpreadsheetApp.getUi().alert(
+    '✅ Trigger Installed!\n\n' +
+    'Zodiac signs will now be automatically added every minute.\n' +
+    'No more popup messages - it runs silently in the background.\n\n' +
+    'The trigger only processes rows that:\n' +
+    '• Have a timestamp in Column A\n' +
+    '• Don\'t already have a zodiac sign in Column U'
+  );
+}
+
+/**
+ * Remove the automatic trigger
+ */
+function removeTrigger() {
+  const triggers = ScriptApp.getProjectTriggers();
+  let removed = 0;
+  
+  triggers.forEach(trigger => {
+    if (trigger.getHandlerFunction() === 'addZodiacToFormResponses') {
+      ScriptApp.deleteTrigger(trigger);
+      removed++;
+    }
+  });
+  
+  Logger.log(`Removed ${removed} trigger(s)`);
+  SpreadsheetApp.getUi().alert(`✅ Removed ${removed} automatic trigger(s)`);
+}
+
+/**
+ * Manual run function - processes all rows and shows results
+ */
+function manualRunWithReport() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('Form Responses 1');
+  
+  if (!sheet) {
+    SpreadsheetApp.getUi().alert('Error: "Form Responses 1" sheet not found!');
+    return;
+  }
+  
+  const data = sheet.getDataRange().getValues();
+  
+  if (data.length < 2) {
+    SpreadsheetApp.getUi().alert('No data found in the sheet.');
+    return;
+  }
+  
+  const headers = data[0];
+  const timestampCol = 0;
+  const zodiacCol = 20;
+  
+  let birthdayCol = -1;
+  for (let i = 0; i < headers.length; i++) {
+    if (headers[i].toString().toLowerCase().includes('birthday')) {
+      birthdayCol = i;
+      break;
+    }
+  }
+  
+  if (birthdayCol === -1) {
+    SpreadsheetApp.getUi().alert('Error: Birthday column not found!');
+    return;
+  }
+  
+  // Set header
+  if (!headers[zodiacCol] || headers[zodiacCol] !== 'Zodiac Sign') {
+    sheet.getRange(1, zodiacCol + 1).setValue('Zodiac Sign');
+  }
+  
+  let successCount = 0;
+  let skippedNoTimestamp = 0;
+  let skippedHasZodiac = 0;
+  let skippedNoBirthday = 0;
+  
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const timestamp = row[timestampCol];
+    const birthday = row[birthdayCol];
+    const existingZodiac = row[zodiacCol];
+    
+    if (!timestamp) {
+      skippedNoTimestamp++;
+      continue;
+    }
+    
+    if (existingZodiac) {
+      skippedHasZodiac++;
+      continue;
+    }
+    
+    if (!birthday) {
+      skippedNoBirthday++;
+      continue;
+    }
+    
+    const zodiac = getZodiacSign(birthday);
+    
+    if (zodiac) {
+      sheet.getRange(i + 1, zodiacCol + 1).setValue(zodiac);
+      successCount++;
+    }
+  }
+  
+  SpreadsheetApp.getUi().alert(
+    '📊 Manual Run Complete!\n\n' +
+    `✅ Added zodiac signs: ${successCount}\n` +
+    `⏭️ Skipped (no timestamp): ${skippedNoTimestamp}\n` +
+    `⏭️ Skipped (already has zodiac): ${skippedHasZodiac}\n` +
+    `⏭️ Skipped (no birthday): ${skippedNoBirthday}\n\n` +
+    `Total rows processed: ${data.length - 1}`
+  );
+}
+
+/**
+ * Creates a custom menu when the spreadsheet opens
+ */
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+  ui.createMenu('🔮 Zodiac Tools')
+    .addItem('⚙️ Install Auto-Trigger (Run Once)', 'setupTrigger')
+    .addItem('🗑️ Remove Auto-Trigger', 'removeTrigger')
+    .addSeparator()
+    .addItem('▶️ Manual Run (with report)', 'manualRunWithReport')
+    .addItem('🧪 Test Zodiac Calculator', 'testZodiacCalculation')
+    .addToUi();
+}
