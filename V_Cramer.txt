@@ -1,1 +1,836 @@
-/** * Generate Edges_Top_Sim sheet for network analysis *  * OUTPUT FORMAT (matches Guest_Similarity script + adds photo URLs): * source | target | similarity | Person 1 Photo | Person 2 Photo * -------|--------|------------|----------------|---------------- * Guest1 | Guest2 | 0.7500     | https://...    | https://... * Var1   | Var2   | 0.4500     |                | *  * Includes BOTH Guest-Guest AND Variable-Variable edges * Photo URLs pulled from Pan_Master for guest pairs *  * @param {Object[]} correlations - All correlation pairs with values * @param {Object[]} codeCols - Variable metadata * @param {Array[]} masterVals - Full data table from Pan_Master */function writeEdgesTopSim_(correlations, codeCols, masterVals) {  const ss = SpreadsheetApp.getActive();  let sh = ss.getSheetByName(VC_EDGES_SHEET);  if (!sh) sh = ss.insertSheet(VC_EDGES_SHEET);  sh.clear();  // -------------------------------------------------------------------------  // Build guest lookup map (Screen Name -> Photo URL)  // -------------------------------------------------------------------------  const guestPhotoMap = {};  if (masterVals && masterVals.length > 2) {    const header = masterVals[0];    const screenNameIdx = header.findIndex(h =>       String(h || '').toLowerCase().trim() === 'screen name' ||       String(h || '').toLowerCase().trim() === 'screen_name' ||      String(h || '').toLowerCase().trim() === 'screenname'    );    const photoUrlIdx = header.findIndex(h =>       String(h || '').toLowerCase().trim() === 'photo url' ||       String(h || '').toLowerCase().trim() === 'photo_url' ||      String(h || '').toLowerCase().trim() === 'photourl'    );        if (screenNameIdx >= 0 && photoUrlIdx >= 0) {      for (let r = 1; r < masterVals.length; r++) {        const row = masterVals[r];        const screenName = String(row[screenNameIdx] || '').trim();        const photoUrl = String(row[photoUrlIdx] || '').trim();        if (screenName) {          guestPhotoMap[screenName] = photoUrl;        }      }    }  }  // -------------------------------------------------------------------------  // PART 1: Variable-to-Variable edges (no photos)  // -------------------------------------------------------------------------  const varEdges = correlations && correlations.length > 0     ? correlations.filter(c => c.value >= VC_EDGE_THRESHOLD).map(edge => ({        source: edge.var1,        target: edge.var2,        similarity: edge.value,        photo1: '',        photo2: ''      }))    : [];  // -------------------------------------------------------------------------  // PART 2: Guest-to-Guest similarity edges (with photos)  // -------------------------------------------------------------------------  const guestEdges = [];    if (masterVals && masterVals.length > 2 && codeCols && codeCols.length > 0) {    const header = masterVals[0];    const screenNameIdx = header.findIndex(h =>       String(h || '').toLowerCase().trim() === 'screen name' ||       String(h || '').toLowerCase().trim() === 'screen_name' ||      String(h || '').toLowerCase().trim() === 'screenname'    );        if (screenNameIdx >= 0) {      const guests = [];      for (let r = 1; r < masterVals.length; r++) {        const row = masterVals[r];        const screenName = String(row[screenNameIdx] || '').trim();                if (screenName) {          const codes = codeCols.map(col => vcNormalizeCode_(row[col.idx - 1]));          guests.push({ screenName, codes });        }      }            for (let i = 0; i < guests.length; i++) {        for (let j = i + 1; j < guests.length; j++) {          const similarity = vcCalculateJaccardSimilarity_(guests[i].codes, guests[j].codes);                    if (similarity >= VC_GUEST_SIM_THRESHOLD) {            guestEdges.push({              source: guests[i].screenName,              target: guests[j].screenName,              similarity: similarity,              photo1: guestPhotoMap[guests[i].screenName] || '',              photo2: guestPhotoMap[guests[j].screenName] || ''            });          }        }      }    }  }  // -------------------------------------------------------------------------  // Combine ALL edges (Variable-Variable + Guest-Guest)  // -------------------------------------------------------------------------  const allEdges = [...varEdges, ...guestEdges];    if (allEdges.length === 0) {    sh.getRange(1, 1).setValue('No edges found above thresholds.');    return;  }  allEdges.sort((a, b) => b.similarity - a.similarity);  // Include photo URLs in output  const headers = [['source', 'target', 'similarity', 'Person 1 Photo', 'Person 2 Photo']];  const edgeData = allEdges.map(edge => [    edge.source,    edge.target,    edge.similarity,    edge.photo1,    edge.photo2  ]);  // -------------------------------------------------------------------------  // Write to sheet  // -------------------------------------------------------------------------  sh.getRange(1, 1, 1, 5).setValues(headers);  sh.getRange(2, 1, edgeData.length, 5).setValues(edgeData);  // -------------------------------------------------------------------------  // Format the sheet  // -------------------------------------------------------------------------  sh.getRange(1, 1, 1, 5)    .setFontWeight('bold')    .setBackground('#4a86e8')    .setFontColor('#ffffff');  sh.getRange(2, 3, edgeData.length, 1).setNumberFormat('0.0000');  sh.setFrozenRows(1);  sh.autoResizeColumns(1, 5);    sh.getRange(1, 1, edgeData.length + 1, 5)    .setBorder(true, true, true, true, true, true);    for (let r = 2; r <= edgeData.length + 1; r++) {    if ((r - 2) % 2 === 0) {      sh.getRange(r, 1, 1, 5).setBackground('#f3f3f3');    }  }    // -------------------------------------------------------------------------  // OPTIONAL: Write Top 30 Guest Matches report to separate sheet  // -------------------------------------------------------------------------  writeTopGuestMatches_(guestEdges, guestPhotoMap);    // -------------------------------------------------------------------------  // OPTIONAL: Write separate reference sheet for Variable-Variable only  // -------------------------------------------------------------------------  writeVariableCorrelations_(correlations);}/** * V_Cramers: Cramer's V (categorical ↔ categorical) from Pan_Master and Pan_Dict *  * PURPOSE: * - Calculates Cramer's V correlation coefficient between all pairs of categorical variables * - Cramer's V measures association strength between categorical variables (0 = no association, 1 = perfect association) * - Uses code_* columns in Pan_Master (single-choice categoricals) * - Looks up option counts per variable from Pan_Dict (for denominator in chi-square calculation) * - Skips rows with missing codes on either variable * - Writes square correlation matrix to sheet "V_Cramers_Categories" * - Includes Top 10 Correlations report with common pairing examples * - Highlights meaningful correlations (excludes likely spurious correlations like zodiac patterns) * - Generates Edges_Top_Sim sheet for network analysis (matching Guest_Similarity format) */// ============================================================================// CONFIGURATION CONSTANTS// ============================================================================// Reuse globals if they exist; otherwise fallback to defaultsconst VC_MASTER_SHEET = (typeof PAN_MASTER_SHEET !== 'undefined') ? PAN_MASTER_SHEET : 'Pan_Master';const VC_DICT_SHEET   = (typeof PAN_DICT_SHEET   !== 'undefined') ? PAN_DICT_SHEET   : 'Pan_Dict';const VC_OUTPUT_SHEET = 'V_Cramers_Categories';const VC_EDGES_SHEET = 'Edges_Top_Sim';// Threshold for including edges (only correlations above this value)const VC_EDGE_THRESHOLD = 0.10;  // Adjust as needed (0.1 = weak correlation minimum)// Threshold for guest similarity (Jaccard index for shared categorical responses)const VC_GUEST_SIM_THRESHOLD = 0.20;  // Minimum similarity to include guest-to-guest edge// Number of top matches to display in reportsconst VC_TOP_MATCHES_COUNT = 30;  // Show top 30 matches// ============================================================================// MAIN FUNCTION// ============================================================================/** * Main entry point for building the Cramer's V correlation matrix *  * PROCESS: * 1. Load data from Pan_Master (encoded survey responses) and Pan_Dict (variable metadata) * 2. Identify all categorical variables (code_* columns) that have ≥2 categories * 3. Compute Cramer's V for all pairs of variables * 4. Generate top 10 strongest correlations with real-world examples * 5. Write matrix and report to output sheet with formatting * 6. Generate Edges_Top_Sim sheet for network analysis */function buildVCramers() {  const ss = SpreadsheetApp.getActive();  const master = ss.getSheetByName(VC_MASTER_SHEET);  const dict = ss.getSheetByName(VC_DICT_SHEET);    // Validate required sheets exist  if (!master) throw new Error(`Sheet "${VC_MASTER_SHEET}" not found.`);  if (!dict) throw new Error(`Sheet "${VC_DICT_SHEET}" not found.`);  // Load all data from sheets into memory for faster processing  const masterVals = master.getDataRange().getValues();  if (masterVals.length < 2) {    writeVCMatrix_([], [], []);    writeEdgesTopSim_([], [], []);    return;  }  const dictVals = dict.getDataRange().getValues();  const dictMap = vcBuildDictMap_(dictVals); // key -> {label, type, k, options[]}  // -------------------------------------------------------------------------  // STEP 1: Identify categorical code columns in Pan_Master  // -------------------------------------------------------------------------  const header = masterVals[0];  const codeCols = [];    header.forEach((h, i) => {    const name = String(h || '');    if (name.startsWith('code_')) {      const key = name.substring('code_'.length);      const meta = dictMap[key];            if (meta && meta.type === 'single' && meta.k >= 2) {        codeCols.push({           name: name,          key: key,          label: meta.label || key,          idx: i + 1,          k: meta.k        });      }    }  });  if (codeCols.length === 0) {    writeVCMatrix_([], [], []);    writeEdgesTopSim_([], [], masterVals);    return;  }  // -------------------------------------------------------------------------  // STEP 2: Compute Cramer's V for all pairs of variables  // -------------------------------------------------------------------------  const nVars = codeCols.length;  const matrix = Array.from({ length: nVars }, () => Array(nVars).fill(''));  const correlations = [];    for (let i = 0; i < nVars; i++) {    matrix[i][i] = 1.0;        for (let j = i + 1; j < nVars; j++) {      const vi = codeCols[i];      const vj = codeCols[j];            const v = vcCramersV_(masterVals, vi.idx, vi.k, vj.idx, vj.k);            matrix[i][j] = v;      matrix[j][i] = v;            if (v !== '' && typeof v === 'number') {        correlations.push({          var1: vi.label,          var2: vj.label,          var1Key: vi.key,          var2Key: vj.key,          value: v        });      }    }  }  // -------------------------------------------------------------------------  // STEP 3: Generate top 10 correlations with real-world examples  // -------------------------------------------------------------------------  correlations.sort((a, b) => b.value - a.value);  const top10 = correlations.slice(0, 10);    const top10WithExamples = top10.map(corr => {    const vi = codeCols.find(c => c.label === corr.var1);    const vj = codeCols.find(c => c.label === corr.var2);        const examples = vcGetTopPairs_(masterVals, vi.idx, vj.idx, dictMap, vi.key, vj.key, 3);        return { ...corr, examples };  });  // -------------------------------------------------------------------------  // STEP 4: Write results to sheet with formatting  // -------------------------------------------------------------------------  const labels = codeCols.map(c => c.label);  writeVCMatrix_(labels, matrix, top10WithExamples);  formatVCramersSheet_(labels.length);    // -------------------------------------------------------------------------  // STEP 5: Generate edge lists for network analysis  // -------------------------------------------------------------------------  // Write GUEST-GUEST edges to Edges_Top_Sim (for matchmaker)  // Write VARIABLE-VARIABLE edges to Edges_Top_Sim also (combined)  // Write separate Variable_Correlations sheet (for reference)  writeEdgesTopSim_(correlations, codeCols, masterVals);}// ============================================================================// EDGES_TOP_SIM: NETWORK EDGE LIST GENERATION// ============================================================================/** * Generate Edges_Top_Sim sheet for network analysis *  * OUTPUT FORMAT (matches Guest_Similarity script): * source | target | similarity * -------|--------|------------ * Guest1 | Guest2 | 0.7500 * Guest3 | Guest4 | 0.6800 *  * IMPORTANT: Only writes GUEST-GUEST edges to Edges_Top_Sim for the matchmaker. * Variable-Variable correlations are written to V_Cramers_Categories report instead. *  * @param {Object[]} correlations - All correlation pairs with values * @param {Object[]} codeCols - Variable metadata * @param {Array[]} masterVals - Full data table from Pan_Master */function writeEdgesTopSim_(correlations, codeCols, masterVals) {  const ss = SpreadsheetApp.getActive();  let sh = ss.getSheetByName(VC_EDGES_SHEET);  if (!sh) sh = ss.insertSheet(VC_EDGES_SHEET);  sh.clear();  // -------------------------------------------------------------------------  // Calculate Guest-to-Guest similarity edges ONLY  // -------------------------------------------------------------------------  const guestEdges = [];    if (masterVals && masterVals.length > 2 && codeCols && codeCols.length > 0) {    const header = masterVals[0];    const screenNameIdx = header.findIndex(h =>       String(h || '').toLowerCase().trim() === 'screen name' ||       String(h || '').toLowerCase().trim() === 'screen_name' ||      String(h || '').toLowerCase().trim() === 'screenname'    );        if (screenNameIdx >= 0) {      const guests = [];      for (let r = 1; r < masterVals.length; r++) {        const row = masterVals[r];        const screenName = String(row[screenNameIdx] || '').trim();                if (screenName) {          const codes = codeCols.map(col => vcNormalizeCode_(row[col.idx - 1]));          guests.push({ screenName, codes });        }      }            for (let i = 0; i < guests.length; i++) {        for (let j = i + 1; j < guests.length; j++) {          const similarity = vcCalculateJaccardSimilarity_(guests[i].codes, guests[j].codes);                    if (similarity >= VC_GUEST_SIM_THRESHOLD) {            guestEdges.push({              source: guests[i].screenName,              target: guests[j].screenName,              similarity: similarity            });          }        }      }    }  }  // -------------------------------------------------------------------------  // Write ONLY guest-guest edges to Edges_Top_Sim  // -------------------------------------------------------------------------  if (guestEdges.length === 0) {    sh.getRange(1, 1).setValue('No guest pairs found above threshold.');    return;  }  guestEdges.sort((a, b) => b.similarity - a.similarity);  // CRITICAL: Use lowercase column names to match Guest_Similarity format  const headers = [['source', 'target', 'similarity']];  const edgeData = guestEdges.map(edge => [    edge.source,    edge.target,    edge.similarity  ]);  // -------------------------------------------------------------------------  // Write to sheet  // -------------------------------------------------------------------------  sh.getRange(1, 1, 1, 3).setValues(headers);  sh.getRange(2, 1, edgeData.length, 3).setValues(edgeData);  // -------------------------------------------------------------------------  // Format the sheet  // -------------------------------------------------------------------------  sh.getRange(1, 1, 1, 3)    .setFontWeight('bold')    .setBackground('#4a86e8')    .setFontColor('#ffffff');  sh.getRange(2, 3, edgeData.length, 1).setNumberFormat('0.0000');  sh.setFrozenRows(1);  sh.autoResizeColumns(1, 3);    sh.getRange(1, 1, edgeData.length + 1, 3)    .setBorder(true, true, true, true, true, true);    for (let r = 2; r <= edgeData.length + 1; r++) {    if ((r - 2) % 2 === 0) {      sh.getRange(r, 1, 1, 3).setBackground('#f3f3f3');    }  }    // -------------------------------------------------------------------------  // OPTIONAL: Write Variable-Variable correlations to separate reference sheet  // -------------------------------------------------------------------------  writeVariableCorrelations_(correlations);}/** * Write Variable-Variable correlations to a separate reference sheet * This keeps the full network analysis data separate from guest matches */function writeVariableCorrelations_(correlations) {  const ss = SpreadsheetApp.getActive();  let sh = ss.getSheetByName('Variable_Correlations');  if (!sh) sh = ss.insertSheet('Variable_Correlations');  sh.clear();    const varEdges = correlations && correlations.length > 0     ? correlations.filter(c => c.value >= VC_EDGE_THRESHOLD)    : [];    if (varEdges.length === 0) {    sh.getRange(1, 1).setValue('No variable correlations above threshold.');    return;  }    varEdges.sort((a, b) => b.value - a.value);    const headers = [['Variable 1', 'Variable 2', 'Cramer\'s V']];  const data = varEdges.map(edge => [edge.var1, edge.var2, edge.value]);    sh.getRange(1, 1, 1, 3).setValues(headers);  sh.getRange(2, 1, data.length, 3).setValues(data);    sh.getRange(1, 1, 1, 3)    .setFontWeight('bold')    .setBackground('#6a1b9a')    .setFontColor('#ffffff');    sh.getRange(2, 3, data.length, 1).setNumberFormat('0.0000');  sh.setFrozenRows(1);  sh.autoResizeColumns(1, 3);}/** * Write Top 30 Guest Matches to a beautifully formatted sheet * Shows the strongest guest-to-guest similarity matches with photos */function writeTopGuestMatches_(guestEdges, guestPhotoMap) {  const ss = SpreadsheetApp.getActive();  let sh = ss.getSheetByName('Top_Guest_Matches');  if (!sh) sh = ss.insertSheet('Top_Guest_Matches');  sh.clear();    if (!guestEdges || guestEdges.length === 0) {    sh.getRange(1, 1).setValue('No guest matches found above threshold.');    return;  }    // Sort and take top 30  const topMatches = guestEdges    .sort((a, b) => b.similarity - a.similarity)    .slice(0, VC_TOP_MATCHES_COUNT);    // -------------------------------------------------------------------------  // Create header section  // -------------------------------------------------------------------------  sh.getRange(1, 1).setValue('🎃 TOP 30 GUEST COMPATIBILITY MATCHES 🎃');  sh.getRange(1, 1, 1, 6).merge();  sh.getRange(1, 1)    .setFontSize(16)    .setFontWeight('bold')    .setHorizontalAlignment('center')    .setBackground('#FF6F00')    .setFontColor('#ffffff');    // Subtitle  sh.getRange(2, 1).setValue('Based on shared categorical responses (interests, music, preferences, etc.)');  sh.getRange(2, 1, 1, 6).merge();  sh.getRange(2, 1)    .setFontSize(10)    .setFontStyle('italic')    .setHorizontalAlignment('center')    .setBackground('#FFB74D')    .setFontColor('#ffffff');    // Column headers  const headers = [['Rank', 'Guest 1', 'Guest 2', 'Similarity %', 'Guest 1 Photo', 'Guest 2 Photo']];  sh.getRange(3, 1, 1, 6).setValues(headers);  sh.getRange(3, 1, 1, 6)    .setFontWeight('bold')    .setBackground('#8D6E63')    .setFontColor('#ffffff')    .setHorizontalAlignment('center');    // -------------------------------------------------------------------------  // Add match data  // -------------------------------------------------------------------------  const rows = topMatches.map((match, idx) => [    idx + 1,    match.source,    match.target,    vcRound4_(match.similarity * 100) + '%',    match.photo1,    match.photo2  ]);    sh.getRange(4, 1, rows.length, 6).setValues(rows);    // -------------------------------------------------------------------------  // Format the data  // -------------------------------------------------------------------------  // Rank column - center aligned  sh.getRange(4, 1, rows.length, 1)    .setHorizontalAlignment('center')    .setFontWeight('bold');    // Similarity column - center aligned  sh.getRange(4, 4, rows.length, 1)    .setHorizontalAlignment('center')    .setFontWeight('bold');    // Add alternating row colors with gradient effect  for (let i = 0; i < rows.length; i++) {    const similarity = topMatches[i].similarity;    let bgColor;        // Gradient based on similarity strength    if (similarity >= 0.70) {      bgColor = '#C8E6C9';  // Strong - light green    } else if (similarity >= 0.50) {      bgColor = '#FFF9C4';  // Good - light yellow    } else if (similarity >= 0.30) {      bgColor = '#FFE0B2';  // Moderate - light orange    } else {      bgColor = '#FFFFFF';  // Weak - white    }        sh.getRange(4 + i, 1, 1, 6).setBackground(bgColor);  }    // -------------------------------------------------------------------------  // Top 3 special highlighting  // -------------------------------------------------------------------------  if (rows.length >= 1) {    sh.getRange(4, 1, 1, 6).setBackground('#FFD700').setFontColor('#000000');  // Gold  }  if (rows.length >= 2) {    sh.getRange(5, 1, 1, 6).setBackground('#C0C0C0').setFontColor('#000000');  // Silver  }  if (rows.length >= 3) {    sh.getRange(6, 1, 1, 6).setBackground('#CD7F32').setFontColor('#ffffff');  // Bronze  }    // -------------------------------------------------------------------------  // Final formatting  // -------------------------------------------------------------------------  sh.autoResizeColumns(1, 6);  sh.setFrozenRows(3);    // Add borders  sh.getRange(1, 1, rows.length + 3, 6)    .setBorder(true, true, true, true, true, true);    // Set column widths  sh.setColumnWidth(1, 60);   // Rank  sh.setColumnWidth(2, 200);  // Guest 1  sh.setColumnWidth(3, 200);  // Guest 2  sh.setColumnWidth(4, 100);  // Similarity  sh.setColumnWidth(5, 300);  // Photo 1  sh.setColumnWidth(6, 300);  // Photo 2}// ============================================================================// CORE COMPUTATION: CRAMER'S V// ============================================================================function vcCramersV_(masterVals, colA, kA, colB, kB) {  const nRows = masterVals.length - 1;  const counts = Array.from({ length: kA }, () => Array(kB).fill(0));  let n = 0;  for (let r = 1; r <= nRows; r++) {    const row = masterVals[r];    const a = vcNormalizeCode_(row[colA - 1]);    const b = vcNormalizeCode_(row[colB - 1]);        if (a >= 1 && a <= kA && b >= 1 && b <= kB) {      counts[a - 1][b - 1]++;      n++;    }  }    if (n === 0) return '';  const rowTotals = counts.map(row => row.reduce((s, x) => s + x, 0));  const colTotals = Array.from({ length: kB }, (_, j) =>     counts.reduce((s, row) => s + row[j], 0)  );  const nonEmptyRows = rowTotals.filter(x => x > 0).length;  const nonEmptyCols = colTotals.filter(x => x > 0).length;  const rEff = Math.max(2, nonEmptyRows);  const cEff = Math.max(2, nonEmptyCols);  let chi2 = 0;  for (let i = 0; i < kA; i++) {    for (let j = 0; j < kB; j++) {      const expected = (rowTotals[i] * colTotals[j]) / n;      if (expected > 0) {        const diff = counts[i][j] - expected;        chi2 += (diff * diff) / expected;      }    }  }    const denom = n * Math.min(rEff - 1, cEff - 1);  if (!isFinite(chi2) || denom <= 0) return '';    const v = Math.sqrt(chi2 / denom);  return isFinite(v) ? vcRound4_(v) : '';}function vcNormalizeCode_(v) {  if (v === null || v === undefined) return 0;  if (typeof v === 'number') return Math.floor(v);  const s = String(v).trim();  if (!s) return 0;  const n = Number(s);  return isFinite(n) ? Math.floor(n) : 0;}function vcRound4_(x) {  return Math.round((+x + Number.EPSILON) * 10000) / 10000;}// ============================================================================// GUEST SIMILARITY CALCULATION// ============================================================================function vcCalculateJaccardSimilarity_(codesA, codesB) {  if (!codesA || !codesB || codesA.length !== codesB.length) return 0;    let intersection = 0;  let union = 0;    for (let i = 0; i < codesA.length; i++) {    const a = codesA[i];    const b = codesB[i];        if (a > 0 || b > 0) {      union++;      if (a > 0 && a === b) {        intersection++;      }    }  }    if (union === 0) return 0;  return vcRound4_(intersection / union);}// ============================================================================// EXAMPLE GENERATION: TOP VALUE PAIRS// ============================================================================function vcGetTopPairs_(masterVals, colA, colB, dictMap, keyA, keyB, topN) {  const pairCounts = {};    for (let r = 1; r < masterVals.length; r++) {    const row = masterVals[r];    const codeA = vcNormalizeCode_(row[colA - 1]);    const codeB = vcNormalizeCode_(row[colB - 1]);        if (codeA > 0 && codeB > 0) {      const key = `${codeA}|${codeB}`;      pairCounts[key] = (pairCounts[key] || 0) + 1;    }  }    const sorted = Object.entries(pairCounts)    .map(([key, count]) => {      const [codeA, codeB] = key.split('|').map(Number);      return { codeA, codeB, count };    })    .sort((a, b) => b.count - a.count)    .slice(0, topN);    const metaA = dictMap[keyA];  const metaB = dictMap[keyB];    return sorted.map(pair => {    const labelA = vcGetCodeLabel_(masterVals[0], colA, pair.codeA, metaA, keyA);    const labelB = vcGetCodeLabel_(masterVals[0], colB, pair.codeB, metaB, keyB);    return `${labelA} & ${labelB} (n=${pair.count})`;  });}function vcGetCodeLabel_(header, colIdx, code, dictMeta, key) {  if (dictMeta && dictMeta.options && dictMeta.options.length > 0) {    const option = dictMeta.options.find(opt => opt.code === code);    if (option && option.label) return option.label;  }  const varName = dictMeta && dictMeta.label ? dictMeta.label : key;  return `${varName} (${code})`;}// ============================================================================// DICTIONARY PARSING// ============================================================================function vcBuildDictMap_(dictVals) {  if (!dictVals || dictVals.length < 2) return {};    const hdr = dictVals[0];  const col = vcNameIndex_(hdr);  const map = {};    for (let r = 1; r < dictVals.length; r++) {    const row = dictVals[r];    const key = String(row[col.Key] || '').trim();    if (!key) continue;    const label = String(row[col.Header] || '').trim();    const type = String(row[col.Type] || '').trim().toLowerCase();    const code = row[col.Code];    const option = String(row[col.Option] || '').trim();    if (!map[key]) {      map[key] = { label, type, k: 0, options: [] };    } else {      if (!map[key].label && label) map[key].label = label;    }    if (type === 'single') {      const cnum = vcToIntSafe_(code);      if (cnum > map[key].k) map[key].k = cnum;      map[key].type = 'single';      if (option && cnum > 0) {        map[key].options.push({ code: cnum, label: option });      }    }  }    return map;}function vcNameIndex_(hdr) {  const m = {};  hdr.forEach((h, i) => (m[String(h).trim()] = i));  return m;}function vcToIntSafe_(v) {  if (typeof v === 'number') return Math.floor(v);  const s = String(v || '').trim();  if (!s) return 0;  const n = Number(s);  return isFinite(n) ? Math.floor(n) : 0;}// ============================================================================// OUTPUT: WRITE TO SHEET// ============================================================================function writeVCMatrix_(labels, matrix, top10) {  const ss = SpreadsheetApp.getActive();  let sh = ss.getSheetByName(VC_OUTPUT_SHEET);  if (!sh) sh = ss.insertSheet(VC_OUTPUT_SHEET);  sh.clear();  if (!labels.length) {    sh.getRange(1, 1).setValue('No categorical variables found (code_*).');    return;  }  const n = labels.length;  const out = Array.from({ length: n + 1 }, () => Array(n + 1).fill(''));    for (let i = 0; i < n; i++) {    out[0][i + 1] = labels[i];    out[i + 1][0] = labels[i];  }    for (let i = 0; i < n; i++) {    for (let j = 0; j < n; j++) {      out[i + 1][j + 1] = matrix[i][j];    }  }  sh.getRange(1, 1, out.length, out[0].length).setValues(out);  sh.setFrozenRows(1);  sh.setFrozenColumns(1);    if (top10 && top10.length > 0) {    const reportStartRow = n + 3;    const reportStartCol = 1;        sh.getRange(reportStartRow, reportStartCol).setValue('TOP 10 STRONGEST CORRELATIONS');    sh.getRange(reportStartRow, reportStartCol, 1, 6)      .setFontWeight('bold')      .setFontSize(12)      .setBackground('#4a86e8')      .setFontColor('#ffffff');        const reportHeaders = [['Rank', 'Variable 1', 'Variable 2', 'Cramer\'s V', 'Strength', 'Common Pairings (Top 3)']];    sh.getRange(reportStartRow + 1, reportStartCol, 1, 6).setValues(reportHeaders);    sh.getRange(reportStartRow + 1, reportStartCol, 1, 6)      .setFontWeight('bold')      .setBackground('#d9d9d9');        const reportData = top10.map((corr, idx) => {      let strength = '';      if (corr.value >= 0.5) strength = 'Strong';      else if (corr.value >= 0.3) strength = 'Moderate';      else if (corr.value >= 0.1) strength = 'Weak';      else strength = 'Very Weak';            const examplesText = corr.examples ? corr.examples.join('\n') : '';            return [        idx + 1,        corr.var1,        corr.var2,        corr.value,        strength,        examplesText      ];    });        sh.getRange(reportStartRow + 2, reportStartCol, reportData.length, 6).setValues(reportData);        const meaningfulPairs = [      ['Age Range', 'Employment Information (Role)'],      ['Do you know the Host(s)?', 'Which host have you known the longest?'],      ['Education Level', 'Employment Information (Role)'],      ['Age Range', 'Music Preference'],      ['Employment Information (Industry)', 'Employment Information (Role)'],      ['Education Level', 'Employment Information (Industry)']    ];        top10.forEach((corr, idx) => {      const isMeaningful = meaningfulPairs.some(pair =>         (pair[0] === corr.var1 && pair[1] === corr.var2) ||        (pair[1] === corr.var1 && pair[0] === corr.var2)      );            if (isMeaningful) {        sh.getRange(reportStartRow + 2 + idx, reportStartCol, 1, 6)          .setBackground('#d9ead3');      }    });        sh.getRange(reportStartRow + 2, reportStartCol + 3, reportData.length, 1).setNumberFormat('0.0000');    sh.getRange(reportStartRow + 2, reportStartCol + 5, reportData.length, 1).setWrap(true);    sh.getRange(reportStartRow, reportStartCol, reportData.length + 2, 6)      .setBorder(true, true, true, true, true, true);        for (let col = reportStartCol; col <= reportStartCol + 5; col++) {      sh.autoResizeColumn(col);    }    sh.setColumnWidth(reportStartCol + 5, 300);  }    sh.autoResizeColumns(1, out[0].length);}// ============================================================================// FORMATTING: CONDITIONAL FORMATTING FOR MATRIX// ============================================================================function formatVCramersSheet_(matrixSize) {  const sh = SpreadsheetApp.getActive().getSheetByName(VC_OUTPUT_SHEET);  if (!sh) return;    const lastRow = sh.getLastRow();  const lastCol = sh.getLastColumn();  if (lastRow < 2 || lastCol < 2) return;  const matrixRows = matrixSize + 1;  const matrixCols = matrixSize + 1;    if (matrixRows >= 2 && matrixCols >= 2) {    sh.getRange(2, 2, matrixRows - 1, matrixCols - 1).setNumberFormat('0.0000');    const range = sh.getRange(2, 2, matrixRows - 1, matrixCols - 1);    const rules = sh.getConditionalFormatRules();    const colorScale = SpreadsheetApp.newConditionalFormatRule()      .setGradientMinpoint('#e8f5e9')      .setGradientMidpointWithValue('#fff9c4', SpreadsheetApp.InterpolationType.PERCENT, '50')      .setGradientMaxpoint('#ffcdd2')      .setRanges([range])      .build();    sh.setConditionalFormatRules([...rules, colorScale]);  }}
+/**
+ * ============================================================================
+ * REPORTS.GS - ALL PARTY SURVEY ANALYSIS REPORTS
+ * ============================================================================
+ *
+ * Contains all report generation functions for party survey analysis.
+ * Each function creates a formatted output sheet with analysis results.
+ *
+ * AVAILABLE REPORTS:
+ * 1. buildDemographicsSummary() - Age, gender, ethnicity, education breakdown
+ * 2. buildMusicInterestsReport() - Music preferences and general interests
+ * 3. buildHostRelationshipReport() - Guest relationships with party hosts
+ * 4. buildAttendeeAnalysis() - Compare attendees vs no-shows
+ * 5. buildGuestProfiles() - Individual guest profile cards
+ *
+ * USAGE:
+ * Run any function from the script editor or create a custom menu
+ */
+
+// ============================================================================
+// GLOBAL CONFIGURATION
+// ============================================================================
+
+
+// ============================================================================
+// REPORT 1: DEMOGRAPHICS SUMMARY
+// ============================================================================
+
+/**
+ * Generate comprehensive demographic overview
+ * Shows distributions across age, gender, ethnicity, education, employment
+ * Output: Demographics_Summary sheet
+ */
+function buildDemographicsSummary() {
+  const ss = SpreadsheetApp.getActive();
+  const cleanSheet = ss.getSheetByName(REPORTS_CLEAN_SHEET);
+ 
+  if (!cleanSheet) {
+    throw new Error(`Sheet &quot;${REPORTS_CLEAN_SHEET}&quot; not found.`);
+  }
+
+  const data = cleanSheet.getDataRange().getValues();
+  if (data.length &lt; 2) {
+    writeSheet_('Demographics_Summary', [['No data available']]);
+    return;
+  }
+
+  const header = data[0];
+  const colIdx = getColumnMap_(header);
+
+  // Calculate overview metrics
+  const totalCount = data.length - 1;
+  const checkedInCount = data.slice(1).filter(row =&gt;
+    String(row[colIdx['Checked-In at Event']] || '').trim().toUpperCase() === 'Y'
+  ).length;
+
+  // Build report sections
+  const sections = [];
+
+  // Title and overview
+  sections.push(['PARTY SURVEY DEMOGRAPHICS SUMMARY']);
+  sections.push(['']);
+  sections.push(['Metric', 'Count', 'Percentage']);
+  sections.push(['Total Responses', totalCount, '100.0%']);
+  sections.push(['Checked-In Attendees', checkedInCount, ((checkedInCount / totalCount) * 100).toFixed(1) + '%']);
+  sections.push(['No-Shows', totalCount - checkedInCount, (((totalCount - checkedInCount) / totalCount) * 100).toFixed(1) + '%']);
+  sections.push(['']);
+
+  // Add distribution sections
+  const demographicFields = [
+    ['Age Range', 'AGE RANGE DISTRIBUTION'],
+    ['Self-Identified Gender', 'GENDER DISTRIBUTION'],
+    ['Self Identified Ethnicity', 'ETHNICITY DISTRIBUTION'],
+    ['Education Level', 'EDUCATION LEVEL DISTRIBUTION'],
+    ['Self-Identified Sexual Orientation', 'SEXUAL ORIENTATION DISTRIBUTION'],
+    ['Employment Information (Industry)', 'INDUSTRY DISTRIBUTION'],
+    ['Employment Information (Role)', 'ROLE DISTRIBUTION']
+  ];
+
+  demographicFields.forEach(([colName, title]) =&gt; {
+    sections.push(...buildDistribution_(data, colIdx, colName, title, 'Checked-In at Event'));
+    sections.push(['']);
+  });
+
+  writeSheet_('Demographics_Summary', sections);
+  formatDemographicsSheet_();
+}
+
+/**
+ * Build distribution table for a demographic variable
+ */
+function buildDistribution_(data, colIdx, colName, title, checkedInCol) {
+  const dataColIdx = colIdx[colName];
+  const checkedInIdx = colIdx[checkedInCol];
+ 
+  if (dataColIdx === undefined) {
+    return [[title], ['Column not found']];
+  }
+
+  const totalCounts = {};
+  const checkedInCounts = {};
+
+  for (let i = 1; i &lt; data.length; i++) {
+    const value = String(data[i][dataColIdx] || '').trim();
+    const isCheckedIn = String(data[i][checkedInIdx] || '').trim().toUpperCase() === 'Y';
+
+    if (!value) continue;
+
+    totalCounts[value] = (totalCounts[value] || 0) + 1;
+    if (isCheckedIn) {
+      checkedInCounts[value] = (checkedInCounts[value] || 0) + 1;
+    }
+  }
+
+  const sortedValues = Object.keys(totalCounts).sort((a, b) =&gt; totalCounts[b] - totalCounts[a]);
+  const totalSum = Object.values(totalCounts).reduce((a, b) =&gt; a + b, 0);
+  const checkedInSum = Object.values(checkedInCounts).reduce((a, b) =&gt; a + b, 0);
+
+  const rows = [
+    [title],
+    ['Category', 'Total', '% of Total', 'Checked-In', '% of Checked-In']
+  ];
+
+  sortedValues.forEach(value =&gt; {
+    const totalCount = totalCounts[value];
+    const checkedInCount = checkedInCounts[value] || 0;
+    const totalPct = ((totalCount / totalSum) * 100).toFixed(1);
+    const checkedInPct = checkedInSum &gt; 0 ? ((checkedInCount / checkedInSum) * 100).toFixed(1) : '0.0';
+
+    rows.push([value, totalCount, `${totalPct}%`, checkedInCount, `${checkedInPct}%`]);
+  });
+
+  rows.push(['TOTAL', totalSum, '100.0%', checkedInSum, '100.0%']);
+
+  return rows;
+}
+
+function formatDemographicsSheet_() {
+  const sheet = SpreadsheetApp.getActive().getSheetByName('Demographics_Summary');
+  if (!sheet) return;
+
+  const data = sheet.getDataRange().getValues();
+ 
+  for (let row = 1; row &lt;= data.length; row++) {
+    const cellValue = String(data[row - 1][0] || '').trim();
+   
+    if (cellValue === 'PARTY SURVEY DEMOGRAPHICS SUMMARY') {
+      sheet.getRange(row, 1, 1, 5).setFontWeight('bold').setFontSize(12)
+        .setBackground('#1c4587').setFontColor('#ffffff');
+    } else if (cellValue.toUpperCase() === cellValue &amp;&amp; cellValue.includes('DISTRIBUTION')) {
+      sheet.getRange(row, 1, 1, 5).setFontWeight('bold').setFontSize(11)
+        .setBackground('#4a86e8').setFontColor('#ffffff');
+    } else if (cellValue === 'Category' || cellValue === 'Metric') {
+      sheet.getRange(row, 1, 1, 5).setFontWeight('bold').setBackground('#d9d9d9');
+    } else if (cellValue === 'TOTAL') {
+      sheet.getRange(row, 1, 1, 5).setFontWeight('bold').setBackground('#f3f3f3');
+    }
+  }
+
+  for (let col = 1; col &lt;= 5; col++) {
+    sheet.autoResizeColumn(col);
+  }
+}
+
+// ============================================================================
+// REPORT 2: MUSIC &amp; INTERESTS
+// ============================================================================
+
+/**
+ * Analyze music preferences and general interests
+ * Output: Music_Interests_Report sheet
+ */
+function buildMusicInterestsReport() {
+  const ss = SpreadsheetApp.getActive();
+  const cleanSheet = ss.getSheetByName(REPORTS_CLEAN_SHEET);
+ 
+  if (!cleanSheet) {
+    throw new Error(`Sheet &quot;${REPORTS_CLEAN_SHEET}&quot; not found.`);
+  }
+
+  const data = cleanSheet.getDataRange().getValues();
+  if (data.length &lt; 2) {
+    writeSheet_('Music_Interests_Report', [['No data available']]);
+    return;
+  }
+
+  const header = data[0];
+  const colIdx = getColumnMap_(header);
+
+  const sections = [];
+
+  // Title
+  sections.push(['MUSIC &amp; INTERESTS ANALYSIS']);
+  sections.push(['']);
+
+  // Music Preferences
+  sections.push(...buildMusicPreferences_(data, colIdx));
+  sections.push(['']);
+
+  // Top Artists
+  sections.push(...buildTopArtists_(data, colIdx, 15));
+  sections.push(['']);
+
+  // Top Interests
+  sections.push(...buildTopInterests_(data, colIdx));
+  sections.push(['']);
+
+  // Music by Age
+  sections.push(...buildMusicByDemographic_(data, colIdx, 'Age Range', 'AGE GROUP'));
+  sections.push(['']);
+
+  // Music by Gender
+  sections.push(...buildMusicByDemographic_(data, colIdx, 'Self-Identified Gender', 'GENDER'));
+  sections.push(['']);
+
+  // Song Requests
+  sections.push(...buildSongRequestsSummary_(data, colIdx));
+
+  writeSheet_('Music_Interests_Report', sections);
+  formatGenericReport_('Music_Interests_Report');
+}
+
+function buildMusicPreferences_(data, colIdx) {
+  const col = colIdx['Music Preference'];
+  if (col === undefined) return [['MUSIC PREFERENCE DISTRIBUTION'], ['Column not found']];
+
+  const counts = {};
+  let total = 0;
+
+  for (let i = 1; i &lt; data.length; i++) {
+    const value = String(data[i][col] || '').trim();
+    if (!value) continue;
+    counts[value] = (counts[value] || 0) + 1;
+    total++;
+  }
+
+  const sorted = Object.entries(counts).sort((a, b) =&gt; b[1] - a[1]);
+  const rows = [['MUSIC PREFERENCE DISTRIBUTION'], ['Genre', 'Count', 'Percentage']];
+
+  sorted.forEach(([genre, count]) =&gt; {
+    rows.push([genre, count, `${((count / total) * 100).toFixed(1)}%`]);
+  });
+
+  rows.push(['TOTAL', total, '100.0%']);
+  return rows;
+}
+
+function buildTopArtists_(data, colIdx, limit) {
+  const col = colIdx['Current Favorite Artist'];
+  if (col === undefined) return [[`TOP ${limit} FAVORITE ARTISTS`], ['Column not found']];
+
+  const counts = {};
+  for (let i = 1; i &lt; data.length; i++) {
+    const value = String(data[i][col] || '').trim();
+    if (!value) continue;
+    counts[value] = (counts[value] || 0) + 1;
+  }
+
+  const sorted = Object.entries(counts).sort((a, b) =&gt; b[1] - a[1]).slice(0, limit);
+  const rows = [[`TOP ${limit} FAVORITE ARTISTS`], ['Rank', 'Artist', 'Mentions']];
+
+  sorted.forEach(([artist, count], idx) =&gt; {
+    rows.push([idx + 1, artist, count]);
+  });
+
+  return rows;
+}
+
+function buildTopInterests_(data, colIdx) {
+  const col = colIdx['Your General Interests (Choose 3)'];
+  if (col === undefined) return [['TOP INTERESTS'], ['Column not found']];
+
+  const counts = {};
+  let totalResponses = 0;
+
+  for (let i = 1; i &lt; data.length; i++) {
+    const value = String(data[i][col] || '').trim();
+    if (!value) continue;
+    totalResponses++;
+
+    const interests = value.split(',').map(s =&gt; s.trim()).filter(s =&gt; s);
+    interests.forEach(interest =&gt; {
+      counts[interest] = (counts[interest] || 0) + 1;
+    });
+  }
+
+  const sorted = Object.entries(counts).sort((a, b) =&gt; b[1] - a[1]);
+  const rows = [['TOP INTERESTS'], ['Interest', 'Count', '% of Guests']];
+
+  sorted.forEach(([interest, count]) =&gt; {
+    rows.push([interest, count, `${((count / totalResponses) * 100).toFixed(1)}%`]);
+  });
+
+  return rows;
+}
+
+function buildMusicByDemographic_(data, colIdx, demoCol, demoLabel) {
+  const musicCol = colIdx['Music Preference'];
+  const demoColIdx = colIdx[demoCol];
+ 
+  if (musicCol === undefined || demoColIdx === undefined) {
+    return [[`MUSIC PREFERENCE BY ${demoLabel}`], ['Required columns not found']];
+  }
+
+  const crosstab = {};
+  for (let i = 1; i &lt; data.length; i++) {
+    const demo = String(data[i][demoColIdx] || '').trim();
+    const music = String(data[i][musicCol] || '').trim();
+    if (!demo || !music) continue;
+
+    if (!crosstab[demo]) crosstab[demo] = {};
+    crosstab[demo][music] = (crosstab[demo][music] || 0) + 1;
+  }
+
+  const allGenres = new Set();
+  Object.values(crosstab).forEach(musicCounts =&gt; {
+    Object.keys(musicCounts).forEach(genre =&gt; allGenres.add(genre));
+  });
+  const genres = Array.from(allGenres).sort();
+  const demos = Object.keys(crosstab).sort();
+
+  const rows = [[`MUSIC PREFERENCE BY ${demoLabel}`], [demoCol, ...genres, 'Total']];
+
+  demos.forEach(demo =&gt; {
+    const row = [demo];
+    let rowTotal = 0;
+    genres.forEach(genre =&gt; {
+      const count = crosstab[demo][genre] || 0;
+      row.push(count);
+      rowTotal += count;
+    });
+    row.push(rowTotal);
+    rows.push(row);
+  });
+
+  return rows;
+}
+
+function buildSongRequestsSummary_(data, colIdx) {
+  const col = colIdx['Name one song you want to hear at the party.'];
+  if (col === undefined) return [['SONG REQUESTS SUMMARY'], ['Column not found']];
+
+  let totalResponses = 0, withSong = 0, withoutSong = 0;
+
+  for (let i = 1; i &lt; data.length; i++) {
+    totalResponses++;
+    const value = String(data[i][col] || '').trim();
+    if (value) withSong++; else withoutSong++;
+  }
+
+  const withPct = ((withSong / totalResponses) * 100).toFixed(1);
+  const withoutPct = ((withoutSong / totalResponses) * 100).toFixed(1);
+
+  return [
+    ['SONG REQUESTS SUMMARY'],
+    ['Category', 'Count', 'Percentage'],
+    ['Provided Song Request', withSong, `${withPct}%`],
+    ['No Song Request', withoutSong, `${withoutPct}%`],
+    ['Total Responses', totalResponses, '100.0%']
+  ];
+}
+
+// ============================================================================
+// REPORT 3: HOST RELATIONSHIPS
+// ============================================================================
+
+/**
+ * Analyze guest relationships with party hosts
+ * Output: Host_Relationships sheet
+ */
+function buildHostRelationshipReport() {
+  const ss = SpreadsheetApp.getActive();
+  const cleanSheet = ss.getSheetByName(REPORTS_CLEAN_SHEET);
+ 
+  if (!cleanSheet) {
+    throw new Error(`Sheet &quot;${REPORTS_CLEAN_SHEET}&quot; not found.`);
+  }
+
+  const data = cleanSheet.getDataRange().getValues();
+  if (data.length &lt; 2) {
+    writeSheet_('Host_Relationships', [['No data available']]);
+    return;
+  }
+
+  const header = data[0];
+  const colIdx = getColumnMap_(header);
+
+  const sections = [];
+
+  sections.push(['HOST RELATIONSHIP ANALYSIS']);
+  sections.push(['']);
+
+  // Overview
+  sections.push(...buildHostOverview_(data, colIdx));
+  sections.push(['']);
+
+  // Duration Distribution
+  sections.push(...buildHostDuration_(data, colIdx));
+  sections.push(['']);
+
+  // Which Host Known
+  sections.push(...buildWhichHost_(data, colIdx));
+  sections.push(['']);
+
+  // Closeness Scores
+  sections.push(...buildClosenessScores_(data, colIdx));
+  sections.push(['']);
+
+  // Closeness by Host
+  sections.push(...buildClosenessbyHost_(data, colIdx));
+
+  writeSheet_('Host_Relationships', sections);
+  formatGenericReport_('Host_Relationships');
+}
+
+function buildHostOverview_(data, colIdx) {
+  const col = colIdx['Do you know the Host(s)?'];
+  if (col === undefined) return [['OVERVIEW'], ['Column not found']];
+
+  let total = data.length - 1, knowHosts = 0, unknownGuests = 0;
+
+  for (let i = 1; i &lt; data.length; i++) {
+    const value = String(data[i][col] || '').trim().toLowerCase();
+    if (value.includes('yes') || value.includes('—')) knowHosts++;
+    else if (value.includes('no')) unknownGuests++;
+  }
+
+  return [
+    ['OVERVIEW'],
+    ['Metric', 'Count', 'Percentage'],
+    ['Total Guests', total, '100.0%'],
+    ['Know Host(s)', knowHosts, `${((knowHosts / total) * 100).toFixed(1)}%`],
+    ['Unknown Guests', unknownGuests, `${((unknownGuests / total) * 100).toFixed(1)}%`]
+  ];
+}
+
+function buildHostDuration_(data, colIdx) {
+  const col = colIdx['Do you know the Host(s)?'];
+  if (col === undefined) return [['FRIENDSHIP DURATION'], ['Column not found']];
+
+  const counts = {};
+  let total = 0;
+
+  for (let i = 1; i &lt; data.length; i++) {
+    const value = String(data[i][col] || '').trim();
+    if (!value) continue;
+    counts[value] = (counts[value] || 0) + 1;
+    total++;
+  }
+
+  const order = ['No', 'Yes — 3–12 months', 'Yes — 1–3 years', 'Yes — 3–5 years', 'Yes — 5–10 years', 'Yes — more than 10 years'];
+  const sorted = Object.keys(counts).sort((a, b) =&gt; {
+    const idxA = order.indexOf(a);
+    const idxB = order.indexOf(b);
+    if (idxA === -1 &amp;&amp; idxB === -1) return a.localeCompare(b);
+    if (idxA === -1) return 1;
+    if (idxB === -1) return -1;
+    return idxA - idxB;
+  });
+
+  const rows = [['FRIENDSHIP DURATION DISTRIBUTION'], ['Duration', 'Count', 'Percentage']];
+
+  sorted.forEach(duration =&gt; {
+    const count = counts[duration];
+    rows.push([duration, count, `${((count / total) * 100).toFixed(1)}%`]);
+  });
+
+  rows.push(['TOTAL', total, '100.0%']);
+  return rows;
+}
+
+function buildWhichHost_(data, colIdx) {
+  const col = colIdx['Which host have you known the longest?'];
+  if (col === undefined) return [['WHICH HOST KNOWN LONGEST'], ['Column not found']];
+
+  const counts = {};
+  let total = 0;
+
+  for (let i = 1; i &lt; data.length; i++) {
+    const value = String(data[i][col] || '').trim();
+    if (!value) continue;
+    counts[value] = (counts[value] || 0) + 1;
+    total++;
+  }
+
+  const sorted = Object.entries(counts).sort((a, b) =&gt; b[1] - a[1]);
+  const rows = [['WHICH HOST KNOWN LONGEST'], ['Host', 'Count', 'Percentage']];
+
+  sorted.forEach(([host, count]) =&gt; {
+    rows.push([host, count, `${((count / total) * 100).toFixed(1)}%`]);
+  });
+
+  rows.push(['TOTAL', total, '100.0%']);
+  return rows;
+}
+
+function buildClosenessScores_(data, colIdx) {
+  const col = colIdx['If yes, how well do you know them?'];
+  if (col === undefined) return [['CLOSENESS SCORE DISTRIBUTION'], ['Column not found']];
+
+  const counts = {};
+  let total = 0, sum = 0;
+
+  for (let i = 1; i &lt; data.length; i++) {
+    const value = data[i][col];
+    if (value === null || value === undefined || value === '') continue;
+    const score = Number(value);
+    if (!isFinite(score)) continue;
+   
+    counts[score] = (counts[score] || 0) + 1;
+    sum += score;
+    total++;
+  }
+
+  const avg = total &gt; 0 ? (sum / total).toFixed(2) : 'N/A';
+  const sorted = Object.keys(counts).sort((a, b) =&gt; Number(b) - Number(a));
+
+  const rows = [
+    ['CLOSENESS SCORE DISTRIBUTION (1=Acquaintance, 5=Close Friend)'],
+    ['Score', 'Count', 'Percentage']
+  ];
+
+  sorted.forEach(score =&gt; {
+    const count = counts[score];
+    rows.push([score, count, `${((count / total) * 100).toFixed(1)}%`]);
+  });
+
+  rows.push(['TOTAL', total, '100.0%']);
+  rows.push(['AVERAGE SCORE', avg, '']);
+  return rows;
+}
+
+function buildClosenessbyHost_(data, colIdx) {
+  const hostCol = colIdx['Which host have you known the longest?'];
+  const scoreCol = colIdx['If yes, how well do you know them?'];
+ 
+  if (hostCol === undefined || scoreCol === undefined) {
+    return [['AVERAGE CLOSENESS BY HOST'], ['Required columns not found']];
+  }
+
+  const hostScores = {};
+
+  for (let i = 1; i &lt; data.length; i++) {
+    const host = String(data[i][hostCol] || '').trim();
+    const score = data[i][scoreCol];
+   
+    if (!host || score === null || score === undefined || score === '') continue;
+    const scoreNum = Number(score);
+    if (!isFinite(scoreNum)) continue;
+
+    if (!hostScores[host]) hostScores[host] = { sum: 0, count: 0 };
+    hostScores[host].sum += scoreNum;
+    hostScores[host].count++;
+  }
+
+  const rows = [['AVERAGE CLOSENESS BY HOST'], ['Host', 'Count', 'Average Score']];
+
+  Object.entries(hostScores).forEach(([host, data]) =&gt; {
+    const avg = (data.sum / data.count).toFixed(2);
+    rows.push([host, data.count, avg]);
+  });
+
+  return rows;
+}
+
+// ============================================================================
+// REPORT 4: ATTENDEE VS NO-SHOW ANALYSIS
+// ============================================================================
+
+/**
+ * Compare guests who attended vs those who didn't
+ * Output: Attendee_Analysis sheet
+ */
+function buildAttendeeAnalysis() {
+  const ss = SpreadsheetApp.getActive();
+  const cleanSheet = ss.getSheetByName(REPORTS_CLEAN_SHEET);
+ 
+  if (!cleanSheet) {
+    throw new Error(`Sheet &quot;${REPORTS_CLEAN_SHEET}&quot; not found.`);
+  }
+
+  const data = cleanSheet.getDataRange().getValues();
+  if (data.length &lt; 2) {
+    writeSheet_('Attendee_Analysis', [['No data available']]);
+    return;
+  }
+
+  const header = data[0];
+  const colIdx = getColumnMap_(header);
+
+  const sections = [];
+
+  sections.push(['ATTENDEE VS NO-SHOW ANALYSIS']);
+  sections.push(['']);
+
+  // Compare demographics
+  const compareFields = [
+    ['Age Range', 'AGE RANGE'],
+    ['Self-Identified Gender', 'GENDER'],
+    ['Education Level', 'EDUCATION'],
+    ['Do you know the Host(s)?', 'HOST RELATIONSHIP']
+  ];
+
+  compareFields.forEach(([colName, label]) =&gt; {
+    sections.push(...buildAttendeeComparison_(data, colIdx, colName, label));
+    sections.push(['']);
+  });
+
+  writeSheet_('Attendee_Analysis', sections);
+  formatGenericReport_('Attendee_Analysis');
+}
+
+function buildAttendeeComparison_(data, colIdx, colName, label) {
+  const dataCol = colIdx[colName];
+  const checkedInCol = colIdx['Checked-In at Event'];
+ 
+  if (dataCol === undefined || checkedInCol === undefined) {
+    return [[`${label} COMPARISON`], ['Required columns not found']];
+  }
+
+  const attendeeCounts = {};
+  const noShowCounts = {};
+
+  for (let i = 1; i &lt; data.length; i++) {
+    const value = String(data[i][dataCol] || '').trim();
+    const isAttendee = String(data[i][checkedInCol] || '').trim().toUpperCase() === 'Y';
+
+    if (!value) continue;
+
+    if (isAttendee) {
+      attendeeCounts[value] = (attendeeCounts[value] || 0) + 1;
+    } else {
+      noShowCounts[value] = (noShowCounts[value] || 0) + 1;
+    }
+  }
+
+  const allValues = new Set([...Object.keys(attendeeCounts), ...Object.keys(noShowCounts)]);
+  const sorted = Array.from(allValues).sort();
+
+  const attendeeTotal = Object.values(attendeeCounts).reduce((a, b) =&gt; a + b, 0);
+  const noShowTotal = Object.values(noShowCounts).reduce((a, b) =&gt; a + b, 0);
+
+  const rows = [
+    [`${label} COMPARISON: ATTENDEES VS NO-SHOWS`],
+    ['Category', 'Attendees', '% Attendees', 'No-Shows', '% No-Shows']
+  ];
+
+  sorted.forEach(value =&gt; {
+    const attendeeCount = attendeeCounts[value] || 0;
+    const noShowCount = noShowCounts[value] || 0;
+    const attendeePct = attendeeTotal &gt; 0 ? ((attendeeCount / attendeeTotal) * 100).toFixed(1) : '0.0';
+    const noShowPct = noShowTotal &gt; 0 ? ((noShowCount / noShowTotal) * 100).toFixed(1) : '0.0';
+
+    rows.push([value, attendeeCount, `${attendeePct}%`, noShowCount, `${noShowPct}%`]);
+  });
+
+  rows.push(['TOTAL', attendeeTotal, '100.0%', noShowTotal, '100.0%']);
+  return rows;
+}
+
+// ============================================================================
+// REPORT 5: GUEST PROFILE CARDS
+// ============================================================================
+
+/**
+ * Create individual profile card for each guest
+ * Output: Guest_Profiles sheet
+ */
+function buildGuestProfiles() {
+  const ss = SpreadsheetApp.getActive();
+  const cleanSheet = ss.getSheetByName(REPORTS_CLEAN_SHEET);
+  const simSheet = ss.getSheetByName('Guest_Similarity');
+ 
+  if (!cleanSheet) {
+    throw new Error(`Sheet &quot;${REPORTS_CLEAN_SHEET}&quot; not found.`);
+  }
+
+  const data = cleanSheet.getDataRange().getValues();
+  if (data.length &lt; 2) {
+    writeSheet_('Guest_Profiles', [['No data available']]);
+    return;
+  }
+
+  const header = data[0];
+  const colIdx = getColumnMap_(header);
+
+  // Build profiles
+  const profiles = [
+    ['Screen Name', 'UID', 'Age', 'Gender', 'Orientation', 'Ethnicity', 'Education', 'Industry', 'Role',
+     'Top 3 Interests', 'Music Genre', 'Favorite Artist', 'Personality Trait', 'Host Known Longest',
+     'Closeness', 'Checked-In']
+  ];
+
+  for (let i = 1; i &lt; data.length; i++) {
+    const row = data[i];
+   
+    // Parse interests
+    const interestsStr = String(row[colIdx['Your General Interests (Choose 3)']] || '').trim();
+    const interests = interestsStr.split(',').slice(0, 3).map(s =&gt; s.trim()).join(', ');
+
+    profiles.push([
+      row[colIdx['Screen Name']] || '',
+      row[colIdx['UID']] || '',
+      row[colIdx['Age Range']] || '',
+      row[colIdx['Self-Identified Gender']] || '',
+      row[colIdx['Self-Identified Sexual Orientation']] || '',
+      row[colIdx['Self Identified Ethnicity']] || '',
+      row[colIdx['Education Level']] || '',
+      row[colIdx['Employment Information (Industry)']] || '',
+      row[colIdx['Employment Information (Role)']] || '',
+      interests,
+      row[colIdx['Music Preference']] || '',
+      row[colIdx['Current Favorite Artist']] || '',
+      row[colIdx['At your worst you are…']] || '',
+      row[colIdx['Which host have you known the longest?']] || '',
+      row[colIdx['If yes, how well do you know them?']] || '',
+      row[colIdx['Checked-In at Event']] || ''
+    ]);
+  }
+
+  writeSheet_('Guest_Profiles', profiles);
+ 
+  const sheet = ss.getSheetByName('Guest_Profiles');
+  if (sheet) {
+    sheet.getRange(1, 1, 1, profiles[0].length)
+      .setFontWeight('bold')
+      .setBackground('#4a86e8')
+      .setFontColor('#ffffff');
+    sheet.setFrozenRows(1);
+    for (let col = 1; col &lt;= profiles[0].length; col++) {
+      sheet.autoResizeColumn(col);
+    }
+  }
+}
+
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
+
+/**
+ * Create column name to index mapping
+ */
+function getColumnMap_(header) {
+  const map = {};
+  header.forEach((col, idx) =&gt; {
+    const colName = String(col || '').trim();
+    if (colName) map[colName] = idx;
+  });
+  return map;
+}
+
+/**
+ * Write data to a sheet
+ */
+function writeSheet_(sheetName, data) {
+  const ss = SpreadsheetApp.getActive();
+  let sheet = ss.getSheetByName(sheetName);
+ 
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+  }
+ 
+  sheet.clear();
+
+  if (!data || data.length === 0) {
+    sheet.getRange(1, 1).setValue('No data to display');
+    return;
+  }
+
+  // Find max columns
+  const maxCols = Math.max(...data.map(row =&gt; Array.isArray(row) ? row.length : 1));
+
+  // Pad rows to same length
+  const paddedRows = data.map(row =&gt; {
+    if (!Array.isArray(row)) return [row];
+    const padded = [...row];
+    while (padded.length &lt; maxCols) padded.push('');
+    return padded;
+  });
+
+  sheet.getRange(1, 1, paddedRows.length, maxCols).setValues(paddedRows);
+}
+
+/**
+ * Apply generic formatting to report sheets
+ */
+function formatGenericReport_(sheetName) {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(sheetName);
+  if (!sheet) return;
+
+  const data = sheet.getDataRange().getValues();
+  const maxCols = data[0].length;
+
+  for (let col = 1; col &lt;= maxCols; col++) {
+    sheet.autoResizeColumn(col);
+  }
+
+  for (let row = 1; row &lt;= data.length; row++) {
+    const cellValue = String(data[row - 1][0] || '').trim();
+   
+    // Main titles (ends with ANALYSIS)
+    if (cellValue.includes('ANALYSIS')) {
+      sheet.getRange(row, 1, 1, maxCols)
+        .setFontWeight('bold')
+        .setFontSize(14)
+        .setBackground('#1c4587')
+        .setFontColor('#ffffff');
+    }
+    // Section headers (all caps with keywords)
+    else if (cellValue.toUpperCase() === cellValue &amp;&amp; cellValue.length &gt; 0 &amp;&amp;
+             (cellValue.includes('DISTRIBUTION') || cellValue.includes('TOP ') ||
+              cellValue.includes('BY ') || cellValue.includes('SUMMARY') ||
+              cellValue.includes('COMPARISON') || cellValue.includes('OVERVIEW'))) {
+      sheet.getRange(row, 1, 1, maxCols)
+        .setFontWeight('bold')
+        .setFontSize(11)
+        .setBackground('#4a86e8')
+        .setFontColor('#ffffff');
+    }
+    // Column headers
+    else if (['Category', 'Metric', 'Genre', 'Rank', 'Interest', 'Host', 'Duration',
+              'Score', 'Age Range', 'Gender'].includes(cellValue)) {
+      sheet.getRange(row, 1, 1, maxCols)
+        .setFontWeight('bold')
+        .setBackground('#d9d9d9');
+    }
+    // Total rows
+    else if (cellValue === 'TOTAL' || cellValue.includes('AVERAGE')) {
+      sheet.getRange(row, 1, 1, maxCols)
+        .setFontWeight('bold')
+        .setBackground('#f3f3f3');
+    }
+  }
+}
+
+

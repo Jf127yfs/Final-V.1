@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * PAN_VALIDATION.GS - Setup Validator & Diagnostic Tools
+ * PAN_VALIDATION.GS - Setup Validator &amp; Diagnostic Tools
  * ============================================================================
  *
  * PURPOSE:
@@ -53,7 +53,7 @@ function validatePanSetup() {
  
   const cleanSheet = ss.getSheetByName('Form Responses (Clean)');
   if (!cleanSheet) {
-    report.push('❌ CRITICAL: "Form Responses (Clean)" sheet not found!');
+    report.push('❌ CRITICAL: &quot;Form Responses (Clean)&quot; sheet not found!');
     report.push('   → This is the required source for Pan_Master');
     allGood = false;
   } else {
@@ -62,7 +62,7 @@ function validatePanSetup() {
    
     // Verify required categorical columns exist
     const cleanData = cleanSheet.getDataRange().getValues();
-    if (cleanData.length < 2) {
+    if (cleanData.length &lt; 2) {
       report.push('⚠️  Sheet exists but has no data rows');
       allGood = false;
     } else {
@@ -84,13 +84,13 @@ function validatePanSetup() {
         'At your worst you are…'
       ];
      
-      const missingCols = requiredCols.filter(col =>
-        !cleanHeaders.some(h => String(h).trim() === col)
+      const missingCols = requiredCols.filter(col =&gt;
+        !cleanHeaders.some(h =&gt; String(h).trim() === col)
       );
      
-      if (missingCols.length > 0) {
+      if (missingCols.length &gt; 0) {
         report.push(`⚠️  Missing ${missingCols.length} required columns:`);
-        missingCols.forEach(col => report.push(`   - ${col}`));
+        missingCols.forEach(col =&gt; report.push(`   - ${col}`));
         allGood = false;
       } else {
         report.push(`✅ All ${requiredCols.length} key categorical columns present`);
@@ -106,19 +106,19 @@ function validatePanSetup() {
   const panMaster = ss.getSheetByName('Pan_Master');
   if (!panMaster) {
     report.push('❌ Pan_Master not found');
-    report.push('   → Run "Build Pan Sheets" from Analytics menu');
+    report.push('   → Run &quot;Build Pan Sheets&quot; from Analytics menu');
     allGood = false;
   } else {
     const masterData = panMaster.getDataRange().getValues();
-    if (masterData.length < 2) {
+    if (masterData.length &lt; 2) {
       report.push('⚠️  Pan_Master exists but is empty');
-      report.push('   → Run "Build Pan Sheets" to populate it');
+      report.push('   → Run &quot;Build Pan Sheets&quot; to populate it');
       allGood = false;
     } else {
       const masterHeaders = masterData[0];
-      const codeColumns = masterHeaders.filter(h => String(h).startsWith('code_'));
-      const ohColumns = masterHeaders.filter(h => String(h).startsWith('oh_'));
-      const hasColumns = masterHeaders.filter(h => String(h).startsWith('has_'));
+      const codeColumns = masterHeaders.filter(h =&gt; String(h).startsWith('code_'));
+      const ohColumns = masterHeaders.filter(h =&gt; String(h).startsWith('oh_'));
+      const hasColumns = masterHeaders.filter(h =&gt; String(h).startsWith('has_'));
       const rowCount = masterData.length - 1;
      
       if (codeColumns.length === 0) {
@@ -133,8 +133,8 @@ function validatePanSetup() {
         report.push('');
         report.push(`   Categorical variables for correlation:`);
         // List first 10 variables to avoid cluttering report
-        const varNames = codeColumns.slice(0, 10).map(c => c.replace('code_', ''));
-        report.push(`   ${varNames.join(', ')}${codeColumns.length > 10 ? '...' : ''}`);
+        const varNames = codeColumns.slice(0, 10).map(c =&gt; c.replace('code_', ''));
+        report.push(`   ${varNames.join(', ')}${codeColumns.length &gt; 10 ? '...' : ''}`);
       }
     }
   }
@@ -147,18 +147,18 @@ function validatePanSetup() {
   const panDict = ss.getSheetByName('Pan_Dict');
   if (!panDict) {
     report.push('❌ Pan_Dict not found');
-    report.push('   → Run "Build Pan Sheets" from Analytics menu');
+    report.push('   → Run &quot;Build Pan Sheets&quot; from Analytics menu');
     allGood = false;
   } else {
     const dictData = panDict.getDataRange().getValues();
-    if (dictData.length < 2) {
+    if (dictData.length &lt; 2) {
       report.push('⚠️  Pan_Dict exists but is empty');
       allGood = false;
     } else {
       const dictHeaders = dictData[0];
       const requiredDictCols = ['Key', 'Header', 'Type', 'Option', 'Code'];
-      const hasDictCols = requiredDictCols.every(col =>
-        dictHeaders.some(h => String(h).trim() === col)
+      const hasDictCols = requiredDictCols.every(col =&gt;
+        dictHeaders.some(h =&gt; String(h).trim() === col)
       );
      
       if (!hasDictCols) {
@@ -166,13 +166,13 @@ function validatePanSetup() {
         report.push(`   Required: ${requiredDictCols.join(', ')}`);
         allGood = false;
       } else {
-        const singleTypes = dictData.slice(1).filter(row => row[2] === 'single');
-        const multiTypes = dictData.slice(1).filter(row => row[2] === 'multi');
-        const uniqueVars = new Set(singleTypes.map(row => row[0]));
+        const singleTypes = dictData.slice(1).filter(row =&gt; row[2] === 'single');
+        const multiTypes = dictData.slice(1).filter(row =&gt; row[2] === 'multi');
+        const uniqueVars = new Set(singleTypes.map(row =&gt; row[0]));
        
         report.push(`✅ Pan_Dict found: ${dictData.length - 1} total rows`);
         report.push(`   - ${uniqueVars.size} single-choice variables`);
-        report.push(`   - ${multiTypes.length > 0 ? 'Yes' : 'No'} multi-select variables`);
+        report.push(`   - ${multiTypes.length &gt; 0 ? 'Yes' : 'No'} multi-select variables`);
         report.push(`   - Structure: Key | Header | Type | Option | Code | Note`);
       }
     }
@@ -201,17 +201,17 @@ function validatePanSetup() {
   const vCramers = ss.getSheetByName('V_Cramers');
   if (vCramers) {
     const vData = vCramers.getDataRange().getValues();
-    if (vData.length > 1) {
+    if (vData.length &gt; 1) {
       const varCount = vData.length - 1; // Exclude header
       const lastModified = vCramers.getLastUpdated ?
         vCramers.getLastUpdated().toLocaleString() : 'Unknown';
      
       report.push(`✅ V_Cramers sheet exists with ${varCount} × ${varCount} matrix`);
       report.push(`   → Contains correlation data`);
-      report.push(`   → Can be rebuilt anytime using "Build V_Cramers Matrix"`);
+      report.push(`   → Can be rebuilt anytime using &quot;Build V_Cramers Matrix&quot;`);
     } else {
       report.push('⚠️  V_Cramers sheet exists but is empty');
-      report.push('   → Run "Build V_Cramers Matrix" to generate');
+      report.push('   → Run &quot;Build V_Cramers Matrix&quot; to generate');
     }
   } else {
     report.push('ℹ️  V_Cramers sheet not yet created');
@@ -243,7 +243,7 @@ function validatePanSetup() {
     report.push('🔧 COMMON FIXES:');
     report.push('   • Missing Pan sheets? → Analytics → Build Pan Sheets');
     report.push('   • Missing V_Cramers.gs? → Add the script file (see doc)');
-    report.push('   • Missing source data? → Check "Form Responses (Clean)"');
+    report.push('   • Missing source data? → Check &quot;Form Responses (Clean)&quot;');
     report.push('   • Need help? → Review Master_Desc sheet for structure');
   }
  
@@ -286,12 +286,12 @@ function isReadyForCramers() {
   // Verify Pan_Master has categorical code columns
   const master = ss.getSheetByName('Pan_Master');
   const masterData = master.getDataRange().getValues();
-  if (masterData.length < 2) return false; // No data
+  if (masterData.length &lt; 2) return false; // No data
  
   const headers = masterData[0];
-  const codeCount = headers.filter(h => String(h).startsWith('code_')).length;
+  const codeCount = headers.filter(h =&gt; String(h).startsWith('code_')).length;
  
-  return hasClean && codeCount > 0;
+  return hasClean &amp;&amp; codeCount &gt; 0;
 }
 
 
@@ -302,7 +302,7 @@ function isReadyForCramers() {
 /**
  * Generate detailed mapping of source columns to Pan_Master columns
  *
- * Creates new sheet "Column_Mapping" showing:
+ * Creates new sheet &quot;Column_Mapping&quot; showing:
  * - Each column in Form Responses (Clean)
  * - Corresponding column(s) in Pan_Master
  * - Transformation type (ID, Categorical, Multi-select, etc.)
@@ -321,7 +321,7 @@ function generateColumnMapping() {
   if (!clean) {
     SpreadsheetApp.getUi().alert(
       'Error',
-      '"Form Responses (Clean)" sheet not found.\n\n' +
+      '&quot;Form Responses (Clean)&quot; sheet not found.\n\n' +
       'Please ensure this sheet exists before generating mapping.',
       SpreadsheetApp.getUi().ButtonSet.OK
     );
@@ -331,8 +331,8 @@ function generateColumnMapping() {
   if (!master) {
     SpreadsheetApp.getUi().alert(
       'Error',
-      '"Pan_Master" sheet not found.\n\n' +
-      'Run "Build Pan Sheets" first to create Pan_Master.',
+      '&quot;Pan_Master&quot; sheet not found.\n\n' +
+      'Run &quot;Build Pan Sheets&quot; first to create Pan_Master.',
       SpreadsheetApp.getUi().ButtonSet.OK
     );
     return;
@@ -345,7 +345,7 @@ function generateColumnMapping() {
   // Build mapping report
   const report = [['Source Column (Clean)', 'Pan_Master Column(s)', 'Transformation Type', 'Notes']];
  
-  cleanHeaders.forEach((cleanCol, i) => {
+  cleanHeaders.forEach((cleanCol, i) =&gt; {
     const cleanName = String(cleanCol).trim();
     if (!cleanName) return; // Skip empty columns
    
@@ -387,7 +387,7 @@ function generateColumnMapping() {
     } else {
       // Try to find corresponding code_ column
       const normalized = cleanName.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const codeCol = masterHeaders.find(h => {
+      const codeCol = masterHeaders.find(h =&gt; {
         const hNorm = String(h).replace('code_', '').toLowerCase().replace(/[^a-z0-9]/g, '');
         return hNorm === normalized;
       });
@@ -398,19 +398,19 @@ function generateColumnMapping() {
         notes = 'Options mapped to numeric codes (1, 2, 3...)';
       } else {
         // Check for multi-select (oh_* columns)
-        const ohMatches = masterHeaders.filter(h =>
-          String(h).startsWith('oh_') &&
+        const ohMatches = masterHeaders.filter(h =&gt;
+          String(h).startsWith('oh_') &amp;&amp;
           normalized.includes(String(h).split('_')[1].toLowerCase())
         );
        
-        if (ohMatches.length > 0) {
+        if (ohMatches.length &gt; 0) {
           masterCol = `${ohMatches.length} columns (oh_*)`;
           colType = 'Multi-select (one-hot)';
           notes = 'One binary column per option (0/1)';
         } else {
           // Check for text presence flag
-          const hasCol = masterHeaders.find(h =>
-            String(h).startsWith('has_') &&
+          const hasCol = masterHeaders.find(h =&gt;
+            String(h).startsWith('has_') &amp;&amp;
             normalized.includes(String(h).replace('has_', '').toLowerCase())
           );
          
@@ -461,8 +461,8 @@ function generateColumnMapping() {
   mapSheet.setFrozenRows(1);
  
   // Add alternating row colors
-  if (report.length > 1) {
-    for (let row = 2; row <= report.length; row++) {
+  if (report.length &gt; 1) {
+    for (let row = 2; row &lt;= report.length; row++) {
       if (row % 2 === 0) {
         mapSheet.getRange(row, 1, 1, 4).setBackground('#f3f3f3');
       }
@@ -472,8 +472,8 @@ function generateColumnMapping() {
   // Success message
   SpreadsheetApp.getUi().alert(
     '✅ Column Mapping Generated!',
-    `Created "Column_Mapping" sheet with ${report.length - 1} source columns.\n\n` +
-    'This shows how each column in "Form Responses (Clean)" is\n' +
+    `Created &quot;Column_Mapping&quot; sheet with ${report.length - 1} source columns.\n\n` +
+    'This shows how each column in &quot;Form Responses (Clean)&quot; is\n' +
     'transformed into Pan_Master for analysis.',
     SpreadsheetApp.getUi().ButtonSet.OK
   );
@@ -501,7 +501,7 @@ function refreshAllAnalytics() {
   const response = ui.alert(
     'Refresh All Analytics',
     'This will rebuild:\n' +
-    '• Pan_Master & Pan_Dict\n' +
+    '• Pan_Master &amp; Pan_Dict\n' +
     '• V_Cramers correlation matrix\n' +
     '• Master_Desc documentation\n\n' +
     'This may take a few moments. Continue?',
@@ -538,7 +538,7 @@ function refreshAllAnalytics() {
     ui.alert(
       '✅ All Analytics Refreshed!',
       'Successfully updated:\n' +
-      '✓ Pan_Master & Pan_Dict\n' +
+      '✓ Pan_Master &amp; Pan_Dict\n' +
       '✓ V_Cramers correlation matrix\n' +
       '✓ Master_Desc documentation\n\n' +
       'All sheets are now up to date with the latest data.',

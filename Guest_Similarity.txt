@@ -1,189 +1,145 @@
-/**
- * Convert any Google Drive URL to thumbnail format for embedding
- * Automatically fixes old /uc?export=view URLs to work in <img> tags
- *
- * ✅ V6 FEATURE: Auto-converts URLs during MM page load (no manual sync needed!)
- */
-function convertToThumbnailUrl_(url) {
-  if (!url || url === '' || url === 'Photo URL') return '';
-
-  // Already in thumbnail format - return as-is
-  if (url.includes('/thumbnail?id=')) {
-    return url;
-  }
-
-  // Extract file ID from any Drive URL format
-  let fileId = null;
-
-  // Format: /file/d/FILEID/view or /file/d/FILEID
-  let match = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
-  if (match) fileId = match[1];
-
-  // Format: ?id=FILEID or &id=FILEID
-  if (!fileId) {
-    match = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-    if (match) fileId = match[1];
-  }
-
-  // If we found a file ID, return thumbnail URL
-  if (fileId) {
-    return 'https://drive.google.com/thumbnail?id=' + fileId + '&sz=w500';
-  }
-
-  // If no file ID found, return empty (invalid URL)
-  return '';
-}
-
-/**
+/**
  * Get compatibility matches for the MM.html matchmaker display
  * Reads from Edges_Top_Sim, enriches with guest details from Form Responses (Clean)
- * Only returns matches with similarity > 0.55, adds 10% for display effect
- *
- * ✅ V6 UPDATE: Automatically converts photo URLs to thumbnail format for embedding!
- *    - Guests can upload during party, photos work immediately
- *    - No manual sync needed - happens automatically on MM page load
+ * Only returns matches with similarity &gt; 0.55, adds 10% for display effect
  *
  * @return {Object} Match data for display
  */
 function getCompatibilityMatches() {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-
+   
     // Get the top similarity edges
     const edgesSheet = ss.getSheetByName('Edges_Top_Sim');
     if (!edgesSheet) {
       Logger.log('❌ Edges_Top_Sim sheet not found');
       return { matches: [], totalGuests: 0 };
     }
-
+   
     const edgesData = edgesSheet.getDataRange().getValues();
     const edgesHeaders = edgesData[0];
-
+   
     // Find column indices in Edges_Top_Sim (lowercase: source, target, similarity)
     const sourceCol = edgesHeaders.indexOf('source');
     const targetCol = edgesHeaders.indexOf('target');
     const similarityCol = edgesHeaders.indexOf('similarity');
-
+   
     if (sourceCol === -1 || targetCol === -1 || similarityCol === -1) {
       Logger.log('❌ Required columns not found in Edges_Top_Sim');
       Logger.log('Found headers: ' + edgesHeaders.join(', '));
       return { matches: [], totalGuests: 0 };
     }
-
+   
     Logger.log('✅ Found Edges_Top_Sim with ' + (edgesData.length - 1) + ' rows');
-
+   
     // Get Form Responses (Clean) for ALL guest details
     const cleanSheet = ss.getSheetByName('Form Responses (Clean)');
     if (!cleanSheet) {
       Logger.log('❌ Form Responses (Clean) sheet not found');
       return { matches: [], totalGuests: 0 };
     }
-
+   
     const cleanData = cleanSheet.getDataRange().getValues();
     const cleanHeaders = cleanData[0];
-
+   
     // Find columns in Form Responses (Clean) - based on Master_Desc
-    const screenNameCol = 21; // Column 22 (0-indexed = 21) "Screen Name"
-    const photoUrlCol = 25;   // Column 26 (0-indexed = 25) "Photo URL"
-    const musicCol = 15;      // Column 16 (0-indexed = 15) "Music Preference"
-    const zodiacCol = 2;      // Column 3 (0-indexed = 2) "Zodiac Sign"
-    const interestsCol = 14;  // Column 15 (0-indexed = 14) "Your General Interests (Choose 3)"
-
+    const screenNameCol = 21; // Column 22 (0-indexed = 21) &quot;Screen Name&quot;
+    const photoUrlCol = 25;   // Column 26 (0-indexed = 25) &quot;Photo URL&quot;
+    const musicCol = 15;      // Column 16 (0-indexed = 15) &quot;Music Preference&quot;
+    const zodiacCol = 2;      // Column 3 (0-indexed = 2) &quot;Zodiac Sign&quot;
+    const interestsCol = 14;  // Column 15 (0-indexed = 14) &quot;Your General Interests (Choose 3)&quot;
+   
     // Build guest lookup map from Form Responses (Clean)
     const guestMap = {};
-
-    for (let i = 1; i < cleanData.length; i++) {
+   
+    for (let i = 1; i &lt; cleanData.length; i++) {
       const row = cleanData[i];
       const screenName = row[screenNameCol];
-
+     
       if (screenName) {
         const interestsStr = row[interestsCol] || '';
-        const interests = interestsStr ? interestsStr.split(',').map(s => s.trim()) : [];
-
-        // ✅ V6: Auto-convert photo URL to thumbnail format
-        const rawPhotoUrl = row[photoUrlCol] || '';
-        const photoUrl = convertToThumbnailUrl_(rawPhotoUrl);
-
+        const interests = interestsStr ? interestsStr.split(',').map(s =&gt; s.trim()) : [];
+       
         guestMap[screenName] = {
           screenName: screenName,
-          photoUrl: photoUrl,
+          photoUrl: row[photoUrlCol] || '',
           music: row[musicCol] || '---',
           zodiac: row[zodiacCol] || '---',
           interests: interests
         };
       }
     }
-
+   
     const guestCount = Object.keys(guestMap).length;
-    const photosCount = Object.values(guestMap).filter(g => g.photoUrl).length;
-
+    const photosCount = Object.values(guestMap).filter(g =&gt; g.photoUrl).length;
+   
     Logger.log(`✅ Found ${guestCount} guests in Form Responses (Clean)`);
-    Logger.log(`✅ ${photosCount} guests have photos (auto-converted to thumbnail format)`);
-
+    Logger.log(`✅ ${photosCount} guests have photos`);
+   
     // Process matches from Edges_Top_Sim
     const matches = [];
     let filteredOut = 0;
-
-    for (let i = 1; i < edgesData.length; i++) {
+   
+    for (let i = 1; i &lt; edgesData.length; i++) {
       const row = edgesData[i];
       const screenName1 = row[sourceCol];
       const screenName2 = row[targetCol];
       const rawSimilarity = parseFloat(row[similarityCol]);
-
-      // Filter: only show matches > 0.55
+     
+      // Filter: only show matches &gt; 0.55
       if (!screenName1 || !screenName2 || isNaN(rawSimilarity)) {
         continue;
       }
-
-      if (rawSimilarity <= 0.55) {
+     
+      if (rawSimilarity &lt;= 0.55) {
         filteredOut++;
         continue;
       }
-
+     
       const person1 = guestMap[screenName1];
       const person2 = guestMap[screenName2];
-
+     
       if (!person1 || !person2) {
         Logger.log(`⚠️ Missing guest data for: ${screenName1} or ${screenName2}`);
         continue;
       }
-
+     
       // Find shared interests
       const interests1 = person1.interests || [];
       const interests2 = person2.interests || [];
-      const sharedInterests = interests1.filter(int => interests2.includes(int));
-
+      const sharedInterests = interests1.filter(int =&gt; interests2.includes(int));
+     
       // Add common traits based on other attributes
       const commonTraits = [...sharedInterests];
-
+     
       // Check music match
-      if (person1.music && person2.music &&
-          person1.music !== '---' &&
+      if (person1.music &amp;&amp; person2.music &amp;&amp;
+          person1.music !== '---' &amp;&amp;
           person1.music === person2.music) {
         commonTraits.push(`Music: ${person1.music}`);
       }
-
+     
       // Check zodiac match
-      if (person1.zodiac && person2.zodiac &&
-          person1.zodiac !== '---' &&
+      if (person1.zodiac &amp;&amp; person2.zodiac &amp;&amp;
+          person1.zodiac !== '---' &amp;&amp;
           person1.zodiac === person2.zodiac) {
         commonTraits.push(`Zodiac: ${person1.zodiac}`);
       }
-
+     
       // Add 10% for visual effect (but cap at 1.0)
       const displaySimilarity = Math.min(rawSimilarity + 0.10, 1.0);
-
+     
       matches.push({
         person1: {
           screenName: person1.screenName,
-          photoUrl: person1.photoUrl || '',  // Already converted to thumbnail format
+          photoUrl: person1.photoUrl || '',
           music: person1.music || '---',
           zodiac: person1.zodiac || '---',
           interests: interests1.slice(0, 5) // Limit to first 5
         },
         person2: {
           screenName: person2.screenName,
-          photoUrl: person2.photoUrl || '',  // Already converted to thumbnail format
+          photoUrl: person2.photoUrl || '',
           music: person2.music || '---',
           zodiac: person2.zodiac || '---',
           interests: interests2.slice(0, 5) // Limit to first 5
@@ -192,23 +148,23 @@ function getCompatibilityMatches() {
         sharedInterests: commonTraits.slice(0, 8) // Limit to 8 shared traits
       });
     }
-
+   
     // Sort by similarity (highest first)
-    matches.sort((a, b) => b.similarity - a.similarity);
-
+    matches.sort((a, b) =&gt; b.similarity - a.similarity);
+   
     Logger.log(`✅ Processed ${matches.length} matches (filtered out ${filteredOut} below 0.55)`);
-
+   
     // Save to sheet for reference
-    if (matches.length > 0) {
+    if (matches.length &gt; 0) {
       saveMatchesToSheet(matches);
     }
-
+   
     return {
       matches: matches,
       totalGuests: guestCount,
-      matchesHeader: "The System Detects Compatibility, You Two Should Talk"
+      matchesHeader: &quot;The System Detects Compatibility, You Two Should Talk&quot;
     };
-
+   
   } catch (error) {
     Logger.log('❌ Error in getCompatibilityMatches: ' + error.toString());
     Logger.log('Stack: ' + error.stack);
@@ -227,21 +183,21 @@ function saveMatchesToSheet(matches) {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     let matchSheet = ss.getSheetByName('Recommended_Matches');
-
+   
     // Create sheet if it doesn't exist
     if (!matchSheet) {
       matchSheet = ss.insertSheet('Recommended_Matches');
     }
-
+   
     // Clear existing content
     matchSheet.clear();
-
+   
     // Set header with title
     matchSheet.getRange(1, 1).setValue('THE SYSTEM DETECTS COMPATIBILITY, YOU TWO SHOULD TALK');
     matchSheet.getRange(1, 1, 1, 6).merge();
     matchSheet.getRange(1, 1).setFontSize(14).setFontWeight('bold').setHorizontalAlignment('center');
     matchSheet.getRange(1, 1).setBackground('#FF6F00').setFontColor('#FFFFFF');
-
+   
     // Set column headers
     const headers = [
       'Person 1',
@@ -253,9 +209,9 @@ function saveMatchesToSheet(matches) {
     ];
     matchSheet.getRange(2, 1, 1, headers.length).setValues([headers]);
     matchSheet.getRange(2, 1, 1, headers.length).setFontWeight('bold').setBackground('#8D6E63').setFontColor('#FFFFFF');
-
+   
     // Add data
-    const rows = matches.map(match => [
+    const rows = matches.map(match =&gt; [
       match.person1.screenName,
       match.person2.screenName,
       Math.round(match.similarity * 100) + '%',
@@ -263,23 +219,23 @@ function saveMatchesToSheet(matches) {
       match.person1.photoUrl,
       match.person2.photoUrl
     ]);
-
-    if (rows.length > 0) {
+   
+    if (rows.length &gt; 0) {
       matchSheet.getRange(3, 1, rows.length, headers.length).setValues(rows);
     }
-
+   
     // Format
     matchSheet.autoResizeColumns(1, headers.length);
     matchSheet.setFrozenRows(2);
-
+   
     // Add alternating row colors
-    for (let i = 0; i < rows.length; i++) {
+    for (let i = 0; i &lt; rows.length; i++) {
       const bgColor = i % 2 === 0 ? '#FFF8E1' : '#FFFFFF';
       matchSheet.getRange(3 + i, 1, 1, headers.length).setBackground(bgColor);
     }
-
+   
     Logger.log(`✅ Saved ${matches.length} matches to Recommended_Matches sheet`);
-
+   
   } catch (error) {
     Logger.log('❌ Error saving matches to sheet: ' + error.toString());
   }
@@ -290,16 +246,16 @@ function saveMatchesToSheet(matches) {
  */
 function testGetCompatibilityMatches() {
   Logger.log('=== Starting Compatibility Matches Test ===\n');
-
+ 
   const result = getCompatibilityMatches();
-
+ 
   Logger.log('\n=== RESULTS ===');
   Logger.log('Total matches found: ' + result.matches.length);
   Logger.log('Total guests: ' + result.totalGuests);
-
-  if (result.matches.length > 0) {
+ 
+  if (result.matches.length &gt; 0) {
     Logger.log('\n=== TOP 5 MATCHES ===');
-    for (let i = 0; i < Math.min(5, result.matches.length); i++) {
+    for (let i = 0; i &lt; Math.min(5, result.matches.length); i++) {
       const match = result.matches[i];
       Logger.log(`\n${i + 1}. ${match.person1.screenName} ⭐ ${match.person2.screenName}`);
       Logger.log(`   💕 Compatibility: ${Math.round(match.similarity * 100)}%`);
@@ -310,16 +266,299 @@ function testGetCompatibilityMatches() {
     }
   } else {
     Logger.log('\n⚠️ No matches found! Check:');
-    Logger.log('  - Edges_Top_Sim has data with similarity > 0.55');
+    Logger.log('  - Edges_Top_Sim has data with similarity &gt; 0.55');
     Logger.log('  - Screen names in Edges_Top_Sim match Form Responses (Clean)');
   }
-
+ 
   SpreadsheetApp.getUi().alert(
     '🎃 Compatibility Matches Test\n\n' +
     'Total Matches: ' + result.matches.length + '\n' +
     'Total Guests: ' + result.totalGuests + '\n\n' +
-    (result.matches.length > 0 ?
-      'Top Match: ' + result.matches[0].person1.screenName + ' & ' + result.matches[0].person2.screenName +
+    (result.matches.length &gt; 0 ?
+      'Top Match: ' + result.matches[0].person1.screenName + ' &amp; ' + result.matches[0].person2.screenName +
+      ' (' + Math.round(result.matches[0].similarity * 100) + '%)\n\n' : '') +
+    'Check Recommended_Matches sheet and\nexecution log for full details!'
+  );
+}
+
+/**
+ * Get compatibility matches for the MM.html matchmaker display
+ * Reads from Edges_Top_Sim, enriches with guest details from Form Responses (Clean)
+ * Only returns matches with similarity &gt; 0.55, adds 10% for display effect
+ *
+ * @return {Object} Match data for display
+ */
+function getCompatibilityMatches() {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+   
+    // Get the top similarity edges
+    const edgesSheet = ss.getSheetByName('Edges_Top_Sim');
+    if (!edgesSheet) {
+      Logger.log('❌ Edges_Top_Sim sheet not found');
+      return { matches: [], totalGuests: 0 };
+    }
+   
+    const edgesData = edgesSheet.getDataRange().getValues();
+    const edgesHeaders = edgesData[0];
+   
+    // Find column indices in Edges_Top_Sim (lowercase: source, target, similarity)
+    const sourceCol = edgesHeaders.indexOf('source');
+    const targetCol = edgesHeaders.indexOf('target');
+    const similarityCol = edgesHeaders.indexOf('similarity');
+   
+    if (sourceCol === -1 || targetCol === -1 || similarityCol === -1) {
+      Logger.log('❌ Required columns not found in Edges_Top_Sim');
+      Logger.log('Found headers: ' + edgesHeaders.join(', '));
+      return { matches: [], totalGuests: 0 };
+    }
+   
+    Logger.log('✅ Found Edges_Top_Sim with ' + (edgesData.length - 1) + ' rows');
+   
+    // Get Form Responses (Clean) for ALL guest details
+    const cleanSheet = ss.getSheetByName('Form Responses (Clean)');
+    if (!cleanSheet) {
+      Logger.log('❌ Form Responses (Clean) sheet not found');
+      return { matches: [], totalGuests: 0 };
+    }
+   
+    const cleanData = cleanSheet.getDataRange().getValues();
+    const cleanHeaders = cleanData[0];
+   
+    // Find columns in Form Responses (Clean) - based on Master_Desc
+    const screenNameCol = 21; // Column 22 (0-indexed = 21) &quot;Screen Name&quot;
+    const photoUrlCol = 25;   // Column 26 (0-indexed = 25) &quot;Photo URL&quot;
+    const musicCol = 15;      // Column 16 (0-indexed = 15) &quot;Music Preference&quot;
+    const zodiacCol = 2;      // Column 3 (0-indexed = 2) &quot;Zodiac Sign&quot;
+    const interestsCol = 14;  // Column 15 (0-indexed = 14) &quot;Your General Interests (Choose 3)&quot;
+   
+    // Build guest lookup map from Form Responses (Clean)
+    const guestMap = {};
+   
+    for (let i = 1; i &lt; cleanData.length; i++) {
+      const row = cleanData[i];
+      const screenName = row[screenNameCol];
+     
+      if (screenName) {
+        const interestsStr = row[interestsCol] || '';
+        const interests = interestsStr ? interestsStr.split(',').map(s =&gt; s.trim()) : [];
+       
+        guestMap[screenName] = {
+          screenName: screenName,
+          photoUrl: row[photoUrlCol] || '',
+          music: row[musicCol] || '---',
+          zodiac: row[zodiacCol] || '---',
+          interests: interests
+        };
+      }
+    }
+   
+    const guestCount = Object.keys(guestMap).length;
+    const photosCount = Object.values(guestMap).filter(g =&gt; g.photoUrl).length;
+   
+    Logger.log(`✅ Found ${guestCount} guests in Form Responses (Clean)`);
+    Logger.log(`✅ ${photosCount} guests have photos`);
+   
+    // Process matches from Edges_Top_Sim
+    const matches = [];
+    let filteredOut = 0;
+   
+    for (let i = 1; i &lt; edgesData.length; i++) {
+      const row = edgesData[i];
+      const screenName1 = row[sourceCol];
+      const screenName2 = row[targetCol];
+      const rawSimilarity = parseFloat(row[similarityCol]);
+     
+      // Filter: only show matches &gt; 0.55
+      if (!screenName1 || !screenName2 || isNaN(rawSimilarity)) {
+        continue;
+      }
+     
+      if (rawSimilarity &lt;= 0.55) {
+        filteredOut++;
+        continue;
+      }
+     
+      const person1 = guestMap[screenName1];
+      const person2 = guestMap[screenName2];
+     
+      if (!person1 || !person2) {
+        Logger.log(`⚠️ Missing guest data for: ${screenName1} or ${screenName2}`);
+        continue;
+      }
+     
+      // Find shared interests
+      const interests1 = person1.interests || [];
+      const interests2 = person2.interests || [];
+      const sharedInterests = interests1.filter(int =&gt; interests2.includes(int));
+     
+      // Add common traits based on other attributes
+      const commonTraits = [...sharedInterests];
+     
+      // Check music match
+      if (person1.music &amp;&amp; person2.music &amp;&amp;
+          person1.music !== '---' &amp;&amp;
+          person1.music === person2.music) {
+        commonTraits.push(`Music: ${person1.music}`);
+      }
+     
+      // Check zodiac match
+      if (person1.zodiac &amp;&amp; person2.zodiac &amp;&amp;
+          person1.zodiac !== '---' &amp;&amp;
+          person1.zodiac === person2.zodiac) {
+        commonTraits.push(`Zodiac: ${person1.zodiac}`);
+      }
+     
+      // Add 10% for visual effect (but cap at 1.0)
+      const displaySimilarity = Math.min(rawSimilarity + 0.10, 1.0);
+     
+      matches.push({
+        person1: {
+          screenName: person1.screenName,
+          photoUrl: person1.photoUrl || '',
+          music: person1.music || '---',
+          zodiac: person1.zodiac || '---',
+          interests: interests1.slice(0, 5) // Limit to first 5
+        },
+        person2: {
+          screenName: person2.screenName,
+          photoUrl: person2.photoUrl || '',
+          music: person2.music || '---',
+          zodiac: person2.zodiac || '---',
+          interests: interests2.slice(0, 5) // Limit to first 5
+        },
+        similarity: displaySimilarity, // Already includes +10% boost
+        sharedInterests: commonTraits.slice(0, 8) // Limit to 8 shared traits
+      });
+    }
+   
+    // Sort by similarity (highest first)
+    matches.sort((a, b) =&gt; b.similarity - a.similarity);
+   
+    Logger.log(`✅ Processed ${matches.length} matches (filtered out ${filteredOut} below 0.55)`);
+   
+    // Save to sheet for reference
+    if (matches.length &gt; 0) {
+      saveMatchesToSheet(matches);
+    }
+   
+    return {
+      matches: matches,
+      totalGuests: guestCount,
+      matchesHeader: &quot;The System Detects Compatibility, You Two Should Talk&quot;
+    };
+   
+  } catch (error) {
+    Logger.log('❌ Error in getCompatibilityMatches: ' + error.toString());
+    Logger.log('Stack: ' + error.stack);
+    return {
+      matches: [],
+      totalGuests: 0,
+      error: error.toString()
+    };
+  }
+}
+
+/**
+ * Save matches to a sheet for reference
+ */
+function saveMatchesToSheet(matches) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let matchSheet = ss.getSheetByName('Recommended_Matches');
+   
+    // Create sheet if it doesn't exist
+    if (!matchSheet) {
+      matchSheet = ss.insertSheet('Recommended_Matches');
+    }
+   
+    // Clear existing content
+    matchSheet.clear();
+   
+    // Set header with title
+    matchSheet.getRange(1, 1).setValue('THE SYSTEM DETECTS COMPATIBILITY, YOU TWO SHOULD TALK');
+    matchSheet.getRange(1, 1, 1, 6).merge();
+    matchSheet.getRange(1, 1).setFontSize(14).setFontWeight('bold').setHorizontalAlignment('center');
+    matchSheet.getRange(1, 1).setBackground('#FF6F00').setFontColor('#FFFFFF');
+   
+    // Set column headers
+    const headers = [
+      'Person 1',
+      'Person 2',
+      'Compatibility %',
+      'Shared Interests',
+      'Person 1 Photo',
+      'Person 2 Photo'
+    ];
+    matchSheet.getRange(2, 1, 1, headers.length).setValues([headers]);
+    matchSheet.getRange(2, 1, 1, headers.length).setFontWeight('bold').setBackground('#8D6E63').setFontColor('#FFFFFF');
+   
+    // Add data
+    const rows = matches.map(match =&gt; [
+      match.person1.screenName,
+      match.person2.screenName,
+      Math.round(match.similarity * 100) + '%',
+      match.sharedInterests.join(', '),
+      match.person1.photoUrl,
+      match.person2.photoUrl
+    ]);
+   
+    if (rows.length &gt; 0) {
+      matchSheet.getRange(3, 1, rows.length, headers.length).setValues(rows);
+    }
+   
+    // Format
+    matchSheet.autoResizeColumns(1, headers.length);
+    matchSheet.setFrozenRows(2);
+   
+    // Add alternating row colors
+    for (let i = 0; i &lt; rows.length; i++) {
+      const bgColor = i % 2 === 0 ? '#FFF8E1' : '#FFFFFF';
+      matchSheet.getRange(3 + i, 1, 1, headers.length).setBackground(bgColor);
+    }
+   
+    Logger.log(`✅ Saved ${matches.length} matches to Recommended_Matches sheet`);
+   
+  } catch (error) {
+    Logger.log('❌ Error saving matches to sheet: ' + error.toString());
+  }
+}
+
+/**
+ * Test function to verify getCompatibilityMatches works
+ */
+function testGetCompatibilityMatches() {
+  Logger.log('=== Starting Compatibility Matches Test ===\n');
+ 
+  const result = getCompatibilityMatches();
+ 
+  Logger.log('\n=== RESULTS ===');
+  Logger.log('Total matches found: ' + result.matches.length);
+  Logger.log('Total guests: ' + result.totalGuests);
+ 
+  if (result.matches.length &gt; 0) {
+    Logger.log('\n=== TOP 5 MATCHES ===');
+    for (let i = 0; i &lt; Math.min(5, result.matches.length); i++) {
+      const match = result.matches[i];
+      Logger.log(`\n${i + 1}. ${match.person1.screenName} ⭐ ${match.person2.screenName}`);
+      Logger.log(`   💕 Compatibility: ${Math.round(match.similarity * 100)}%`);
+      Logger.log(`   🎵 Music: ${match.person1.music} / ${match.person2.music}`);
+      Logger.log(`   ⭐ Zodiac: ${match.person1.zodiac} / ${match.person2.zodiac}`);
+      Logger.log(`   ✨ Shared: ${match.sharedInterests.slice(0, 3).join(', ')}`);
+      Logger.log(`   📸 Photos: ${match.person1.photoUrl ? '✅' : '❌'} / ${match.person2.photoUrl ? '✅' : '❌'}`);
+    }
+  } else {
+    Logger.log('\n⚠️ No matches found! Check:');
+    Logger.log('  - Edges_Top_Sim has data with similarity &gt; 0.55');
+    Logger.log('  - Screen names in Edges_Top_Sim match Form Responses (Clean)');
+  }
+ 
+  SpreadsheetApp.getUi().alert(
+    '🎃 Compatibility Matches Test\n\n' +
+    'Total Matches: ' + result.matches.length + '\n' +
+    'Total Guests: ' + result.totalGuests + '\n\n' +
+    (result.matches.length &gt; 0 ?
+      'Top Match: ' + result.matches[0].person1.screenName + ' &amp; ' + result.matches[0].person2.screenName +
       ' (' + Math.round(result.matches[0].similarity * 100) + '%)\n\n' : '') +
     'Check Recommended_Matches sheet and\nexecution log for full details!'
   );

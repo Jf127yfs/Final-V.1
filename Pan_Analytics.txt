@@ -65,7 +65,7 @@ const SPEC = [
   { key: 'age_range', header: 'Age Range', type: 'single',
     opts: ['21-24','25-29','30-34','35-39','40-44','45-49','50+'] },
   { key: 'education', header: 'Education Level', type: 'single',
-    opts: ['High School','Some College','Associates','Bachelors','Masters & Above'] },
+    opts: ['High School','Some College','Associates','Bachelors','Masters &amp; Above'] },
   { key: 'zip', header: 'Current 5 Digit Zip Code', type: 'text_raw' },
   { key: 'ethnicity', header: 'Self Identified Ethnicity', type: 'single',
     opts: ['Black / African American','Mixed / Multiracial','White','Asian / Pacific Islander','Hispanic / Latino','Native American','Not Listed','Prefer Not to Say'] },
@@ -74,7 +74,7 @@ const SPEC = [
   { key: 'orientation', header: 'Self-Identified Sexual Orientation', type: 'single',
     opts: ['Straight / Heterosexual','Bisexual','Gay','Lesbian','Pansexual','Queer','Asexual','Other'] },
   { key: 'industry', header: 'Employment Information (Industry)', type: 'single',
-    opts: ['Arts & Entertainment','Education','Finance / Business Services','Government / Military','Healthcare','Hospitality / Retail','Science / Research','Technology','Trades / Manufacturing','Other'] },
+    opts: ['Arts &amp; Entertainment','Education','Finance / Business Services','Government / Military','Healthcare','Hospitality / Retail','Science / Research','Technology','Trades / Manufacturing','Other'] },
   { key: 'role', header: 'Employment Information (Role)', type: 'single',
     opts: ['Creative / Designer / Artist','Educator / Instructor','Founder / Entrepreneur','Healthcare / Service Provider','Manager / Supervisor','Operations / Admin / Support','Researcher / Scientist','Sales / Marketing / Business Development','Student / Trainee','Technical / Engineer / Developer','Trades / Skilled Labor','Other'] },
   { key: 'know_hosts', header: 'Do you know the Host(s)?', type: 'single',
@@ -85,7 +85,7 @@ const SPEC = [
   { key: 'interests', header: 'Your General Interests (Choose 3)', type: 'multi',
     opts: ['Cooking','Music','Fashion','Travel','Fitness','Gaming','Reading','Art/Design','Photography','Hiking/Outdoors','Sports (general)','Volunteering','Health Sciences','TikTok (watching)','Other'] },
   { key: 'music_pref', header: 'Music Preference', type: 'single',
-    opts: ['Hip-hop','Pop','Indie/Alt','R&B','Rock','Country','Electronic','Jazz','Classical','A mix of all','Other'] },
+    opts: ['Hip-hop','Pop','Indie/Alt','R&amp;B','Rock','Country','Electronic','Jazz','Classical','A mix of all','Other'] },
   { key: 'fav_artist', header: 'Current Favorite Artist', type: 'text' },
   { key: 'song', header: 'Name one song you want to hear at the party.', type: 'text' },
   { key: 'recent_purchase', header: 'Recent purchase you\'re most happy about', type: 'single',
@@ -230,12 +230,12 @@ function buildDistributions() {
   var sh = ss.getSheetByName(PA_CLEAN_SHEET);
  
   if (!sh) {
-    SpreadsheetApp.getUi().alert('Clean sheet "' + PA_CLEAN_SHEET + '" not found. Run cleanFormResponses() first.');
+    SpreadsheetApp.getUi().alert('Clean sheet &quot;' + PA_CLEAN_SHEET + '&quot; not found. Run cleanFormResponses() first.');
     return;
   }
 
   var data = sh.getDataRange().getValues();
-  if (data.length < 2) {
+  if (data.length &lt; 2) {
     writeDistSheet_([]);
     return;
   }
@@ -244,7 +244,7 @@ function buildDistributions() {
   var rows = data.slice(1);
 
   var sections = [];
-  for (var i = 0; i < PA_DIST_HEADERS.length; i++) {
+  for (var i = 0; i &lt; PA_DIST_HEADERS.length; i++) {
     var label = PA_DIST_HEADERS[i];
     var col = headers.indexOf(label);
    
@@ -254,7 +254,7 @@ function buildDistributions() {
     }
    
     var counts = {};
-    for (var r = 0; r < rows.length; r++) {
+    for (var r = 0; r &lt; rows.length; r++) {
       var v = normCat_(rows[r][col]);
       if (!v) continue;
       counts[v] = (counts[v] || 0) + 1;
@@ -270,7 +270,7 @@ function buildDistributions() {
    
     sections.push({
       label: label,
-      rows: table.length > 0 ? table : [['(no data)', 0]]
+      rows: table.length &gt; 0 ? table : [['(no data)', 0]]
     });
   }
 
@@ -290,7 +290,7 @@ function writeDistSheet_(sections) {
   }
 
   var row = 1;
-  for (var i = 0; i < sections.length; i++) {
+  for (var i = 0; i &lt; sections.length; i++) {
     var sec = sections[i];
    
     // Header row - set value first, then format
@@ -305,21 +305,21 @@ function writeDistSheet_(sections) {
     row++;
    
     // Data rows - ensure proper 2D array structure
-    if (sec.rows && sec.rows.length > 0) {
+    if (sec.rows &amp;&amp; sec.rows.length &gt; 0) {
       // Verify each row has exactly 2 elements
       var validRows = [];
-      for (var j = 0; j < sec.rows.length; j++) {
+      for (var j = 0; j &lt; sec.rows.length; j++) {
         var r = sec.rows[j];
-        if (r && r.length >= 2) {
+        if (r &amp;&amp; r.length &gt;= 2) {
           validRows.push([r[0], r[1]]);
-        } else if (r && r.length === 1) {
+        } else if (r &amp;&amp; r.length === 1) {
           validRows.push([r[0], '']);
         } else {
           validRows.push(['(invalid)', 0]);
         }
       }
      
-      if (validRows.length > 0) {
+      if (validRows.length &gt; 0) {
         out.getRange(row, 1, validRows.length, 2).setValues(validRows);
         row += validRows.length;
       }
@@ -343,19 +343,19 @@ function checkSetup() {
   // Check sheets
   var source = ss.getSheetByName(PA_SOURCE_SHEET);
   var clean = ss.getSheetByName(PA_CLEAN_SHEET);
-  messages.push(source ? 'OK: Found source sheet "' + PA_SOURCE_SHEET + '"' : 'MISSING: Sheet "' + PA_SOURCE_SHEET + '"');
-  messages.push(clean ? 'OK: Found clean sheet "' + PA_CLEAN_SHEET + '"' : 'MISSING: Sheet "' + PA_CLEAN_SHEET + '"');
+  messages.push(source ? 'OK: Found source sheet &quot;' + PA_SOURCE_SHEET + '&quot;' : 'MISSING: Sheet &quot;' + PA_SOURCE_SHEET + '&quot;');
+  messages.push(clean ? 'OK: Found clean sheet &quot;' + PA_CLEAN_SHEET + '&quot;' : 'MISSING: Sheet &quot;' + PA_CLEAN_SHEET + '&quot;');
 
   // Check columns in cleaned sheet
   if (clean) {
     try {
       var headers = clean.getRange(1, 1, 1, clean.getLastColumn()).getValues()[0];
       var headerSet = {};
-      for (var i = 0; i < headers.length; i++) {
+      for (var i = 0; i &lt; headers.length; i++) {
         headerSet[String(headers[i] || '').trim()] = true;
       }
      
-      for (var j = 0; j < PA_REQUIRED_HEADERS.length; j++) {
+      for (var j = 0; j &lt; PA_REQUIRED_HEADERS.length; j++) {
         var h = PA_REQUIRED_HEADERS[j];
         messages.push(headerSet[h] ? 'OK: Column present - ' + h : 'MISSING: Column - ' + h);
       }
@@ -388,11 +388,11 @@ function buildPanSheets() {
   var src = ss.getSheetByName(PA_CLEAN_SHEET);
  
   if (!src) {
-    throw new Error('Source sheet "' + PA_CLEAN_SHEET + '" not found.');
+    throw new Error('Source sheet &quot;' + PA_CLEAN_SHEET + '&quot; not found.');
   }
 
   var values = src.getDataRange().getValues();
-  if (values.length < 2) {
+  if (values.length &lt; 2) {
     clearOrCreate_(PAN_DICT_SHEET);
     clearOrCreate_(PAN_MASTER_SHEET);
     SpreadsheetApp.getUi().alert('No data found in ' + PA_CLEAN_SHEET);
@@ -418,14 +418,14 @@ function buildPanSheets() {
 function buildDictRows_(idx) {
   var out = [];
  
-  for (var i = 0; i < SPEC.length; i++) {
+  for (var i = 0; i &lt; SPEC.length; i++) {
     var field = SPEC[i];
     var present = !!idx[norm(field.header)];
     var note = present ? (field.note || '') : 'Header not found';
    
     if (field.type === 'single' || field.type === 'multi') {
       var opts = field.opts || [];
-      for (var j = 0; j < opts.length; j++) {
+      for (var j = 0; j &lt; opts.length; j++) {
         out.push([field.key, field.header, field.type, opts[j], j + 1, note]);
       }
     } else if (field.type === 'number') {
@@ -448,34 +448,34 @@ function buildMaster_(rows, idx) {
   var header = ['Screen Name', 'UID', 'Row', 'TimestampMs', 'Birthday_MM/DD'];
  
   // Add columns by type
-  for (var i = 0; i < SPEC.length; i++) {
+  for (var i = 0; i &lt; SPEC.length; i++) {
     if (SPEC[i].type === 'text_raw') {
       header.push(SPEC[i].key === 'zip' ? 'Zip' : SPEC[i].key);
     }
   }
  
-  for (var i = 0; i < SPEC.length; i++) {
+  for (var i = 0; i &lt; SPEC.length; i++) {
     if (SPEC[i].type === 'single') {
       header.push('code_' + SPEC[i].key);
     }
   }
  
-  for (var i = 0; i < SPEC.length; i++) {
+  for (var i = 0; i &lt; SPEC.length; i++) {
     if (SPEC[i].type === 'multi') {
       var opts = SPEC[i].opts || [];
-      for (var j = 0; j < opts.length; j++) {
+      for (var j = 0; j &lt; opts.length; j++) {
         header.push('oh_' + SPEC[i].key + '_' + opts[j]);
       }
     }
   }
  
-  for (var i = 0; i < SPEC.length; i++) {
+  for (var i = 0; i &lt; SPEC.length; i++) {
     if (SPEC[i].type === 'number') {
       header.push('code_' + SPEC[i].key);
     }
   }
  
-  for (var i = 0; i < SPEC.length; i++) {
+  for (var i = 0; i &lt; SPEC.length; i++) {
     if (SPEC[i].type === 'text') {
       header.push('has_' + SPEC[i].key);
     }
@@ -485,12 +485,12 @@ function buildMaster_(rows, idx) {
  
   // Build code maps
   var codeMaps = {};
-  for (var i = 0; i < SPEC.length; i++) {
+  for (var i = 0; i &lt; SPEC.length; i++) {
     var f = SPEC[i];
     if (f.type === 'single' || f.type === 'multi') {
       var m = {};
       var opts = f.opts || [];
-      for (var j = 0; j < opts.length; j++) {
+      for (var j = 0; j &lt; opts.length; j++) {
         m[norm(opts[j])] = j + 1;
       }
       codeMaps[f.key] = m;
@@ -498,7 +498,7 @@ function buildMaster_(rows, idx) {
   }
  
   // Process each row
-  for (var i = 0; i < rows.length; i++) {
+  for (var i = 0; i &lt; rows.length; i++) {
     var r = rows[i];
     if (!hasValue_(r[0])) continue;
    
@@ -521,7 +521,7 @@ function buildMaster_(rows, idx) {
     outRow.push(toMMDDString_(bIdx ? r[bIdx - 1] : ''));
    
     // Raw text fields
-    for (var j = 0; j < SPEC.length; j++) {
+    for (var j = 0; j &lt; SPEC.length; j++) {
       if (SPEC[j].type === 'text_raw') {
         var cIdx = getIdx_(idx, SPEC[j].header);
         outRow.push(String(cIdx ? r[cIdx - 1] || '' : '').trim());
@@ -529,35 +529,35 @@ function buildMaster_(rows, idx) {
     }
    
     // Single-choice fields
-    for (var j = 0; j < SPEC.length; j++) {
+    for (var j = 0; j &lt; SPEC.length; j++) {
       if (SPEC[j].type === 'single') {
         var cIdx = getIdx_(idx, SPEC[j].header);
         var val = cIdx ? r[cIdx - 1] : '';
         var m = codeMaps[SPEC[j].key];
         var s = String(val || '').trim();
-        outRow.push(s ? (m && m[norm(s)]) || '' : '');
+        outRow.push(s ? (m &amp;&amp; m[norm(s)]) || '' : '');
       }
     }
    
     // Multi-choice fields
-    for (var j = 0; j < SPEC.length; j++) {
+    for (var j = 0; j &lt; SPEC.length; j++) {
       if (SPEC[j].type === 'multi') {
         var cIdx = getIdx_(idx, SPEC[j].header);
         var val = cIdx ? r[cIdx - 1] : '';
         var picks = splitMulti_(val);
         var set = {};
-        for (var k = 0; k < picks.length; k++) {
+        for (var k = 0; k &lt; picks.length; k++) {
           set[norm(picks[k])] = true;
         }
         var opts = SPEC[j].opts || [];
-        for (var k = 0; k < opts.length; k++) {
+        for (var k = 0; k &lt; opts.length; k++) {
           outRow.push(set[norm(opts[k])] ? 1 : 0);
         }
       }
     }
    
     // Numeric fields
-    for (var j = 0; j < SPEC.length; j++) {
+    for (var j = 0; j &lt; SPEC.length; j++) {
       if (SPEC[j].type === 'number') {
         var cIdx = getIdx_(idx, SPEC[j].header);
         var val = cIdx ? r[cIdx - 1] : '';
@@ -567,7 +567,7 @@ function buildMaster_(rows, idx) {
     }
    
     // Text presence fields
-    for (var j = 0; j < SPEC.length; j++) {
+    for (var j = 0; j &lt; SPEC.length; j++) {
       if (SPEC[j].type === 'text') {
         var cIdx = getIdx_(idx, SPEC[j].header);
         var val = cIdx ? r[cIdx - 1] : '';
@@ -598,7 +598,7 @@ function normCat_(v) {
 
 function indexByHeader_(headers) {
   var map = {};
-  for (var i = 0; i < headers.length; i++) {
+  for (var i = 0; i &lt; headers.length; i++) {
     map[norm(headers[i])] = i + 1;
   }
   return map;
@@ -617,8 +617,8 @@ function splitMulti_(v) {
 
 function toEpochMs_(v) {
   if (v instanceof Date) return v.getTime();
-  if (typeof v === 'number' && isFinite(v)) return v;
-  if (typeof v === 'string' && v.trim()) {
+  if (typeof v === 'number' &amp;&amp; isFinite(v)) return v;
+  if (typeof v === 'string' &amp;&amp; v.trim()) {
     var d = new Date(v);
     if (!isNaN(d.getTime())) return d.getTime();
   }
@@ -629,15 +629,15 @@ function toMMDDString_(v) {
   if (v instanceof Date) {
     var m = String(v.getMonth() + 1);
     var d = String(v.getDate());
-    return (m.length < 2 ? '0' + m : m) + '/' + (d.length < 2 ? '0' + d : d);
+    return (m.length &lt; 2 ? '0' + m : m) + '/' + (d.length &lt; 2 ? '0' + d : d);
   }
   var s = String(v || '').trim();
   if (!s) return '';
   var parts = s.split(/[\/.\-]/).map(function(p) { return p.trim(); }).filter(function(p) { return p; });
-  if (parts.length >= 2) {
+  if (parts.length &gt;= 2) {
     var m = String(parts[0]);
     var d = String(parts[1]);
-    return (m.length < 2 ? '0' + m : m) + '/' + (d.length < 2 ? '0' + d : d);
+    return (m.length &lt; 2 ? '0' + m : m) + '/' + (d.length &lt; 2 ? '0' + d : d);
   }
   return '';
 }
@@ -657,7 +657,7 @@ function hasValue_(v) {
 }
 
 function hasText_(v) {
-  return typeof v === 'string' ? v.trim().length > 0 : false;
+  return typeof v === 'string' ? v.trim().length &gt; 0 : false;
 }
 
 function clearOrCreate_(name) {
@@ -683,15 +683,15 @@ function writeSheet_(name, values) {
   var expectedCols = values[0].length;
   var validRows = [];
  
-  for (var i = 0; i < values.length; i++) {
+  for (var i = 0; i &lt; values.length; i++) {
     var row = values[i];
     if (row.length === expectedCols) {
       validRows.push(row);
     } else {
       // Pad or trim row to match expected columns
       var fixedRow = [];
-      for (var j = 0; j < expectedCols; j++) {
-        fixedRow.push(j < row.length ? row[j] : '');
+      for (var j = 0; j &lt; expectedCols; j++) {
+        fixedRow.push(j &lt; row.length ? row[j] : '');
       }
       validRows.push(fixedRow);
       Logger.log('Warning: Row ' + i + ' had ' + row.length + ' columns, expected ' + expectedCols);
@@ -703,7 +703,7 @@ function writeSheet_(name, values) {
   sh.getRange(1, 1, validRows.length, expectedCols).setValues(validRows);
  
   // Format header row
-  if (validRows.length > 0) {
+  if (validRows.length &gt; 0) {
     var headerRange = sh.getRange(1, 1, 1, expectedCols);
     headerRange
       .setBackground('#434343')
