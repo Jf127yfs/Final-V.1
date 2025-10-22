@@ -19,3 +19,199 @@ function testCheckInDiagnostic() {
     Logger.log('First Screen Name: ' + data[1][24]); // Should be Screen Name column
   }
 }
+
+/**
+ * Normalizes all birthday values in Column B (Birthday) of the 'Form Responses (Clean)'
+ * sheet to a consistent 'M/D' string format (e.g., '1/5' or '10/22').
+ * This ensures compatibility with the checkInGuest logic which removes leading zeros.
+ * * NOTE: This is destructive. It overwrites existing data in Column B.
+ */
+function normalizeBirthdaysForCompatibility() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const cleanSheetName = 'Form Responses (Clean)';
+  const cleanSheet = ss.getSheetByName(cleanSheetName);
+
+  if (!cleanSheet) {
+    Logger.log(`❌ Error: Sheet '${cleanSheetName}' not found.`);
+    return;
+  }
+
+  // Column B is index 1 (A=0, B=1)
+  const BIRTHDAY_COLUMN_INDEX = 1;
+  const dataRange = cleanSheet.getDataRange();
+  const values = dataRange.getValues();
+  const numRows = values.length;
+
+  Logger.log(`Starting normalization on ${numRows - 1} data rows.`);
+
+  // Array to hold the new values for Column B
+  const newBirthdayValues = [];
+
+  // Start from row 1 (index 1) to skip headers
+  for (let i = 1; i < numRows; i++) {
+    const rawValue = values[i][BIRTHDAY_COLUMN_INDEX];
+    let normalizedDate = '';
+
+    if (rawValue) {
+      // 1. Handle Google Sheets Date objects (most reliable)
+      if (rawValue instanceof Date) {
+        const month = rawValue.getMonth() + 1; // getMonth is 0-indexed
+        const day = rawValue.getDate();
+        normalizedDate = `${month}/${day}`; // e.g., '5/1'
+      } 
+      // 2. Handle strings (MM/DD or M/D)
+      else if (typeof rawValue === 'string') {
+        const parts = rawValue.trim().split('/');
+        
+        if (parts.length >= 2) {
+          const month = parseInt(parts[0], 10);
+          const day = parseInt(parts[1], 10);
+          
+          if (!isNaN(month) && month >= 1 && month <= 12 && 
+              !isNaN(day) && day >= 1 && day <= 31) {
+            // Converts '05/01' string to '5/1' string, which matches the check-in logic
+            normalizedDate = `${month}/${day}`;
+          }
+        }
+      }
+    }
+    
+    // Keep header in place
+    if (i === 0) {
+      newBirthdayValues.push(rawValue); 
+    } else {
+      newBirthdayValues.push([normalizedDate]);
+    }
+  }
+
+  // Write all normalized values back to column B in a single batch operation
+  // Target: Column B (2), from row 2 (index 1 + 1) to last row
+  if (newBirthdayValues.length > 1) {
+    cleanSheet.getRange(2, BIRTHDAY_COLUMN_INDEX + 1, newBirthdayValues.length - 1, 1).setValues(newBirthdayValues.slice(1));
+    SpreadsheetApp.flush();
+    Logger.log(`✅ Successfully normalized birthdays for ${newBirthdayValues.length - 1} guests.`);
+  } else {
+    Logger.log('ℹ️ No guest data found to normalize.');
+  }
+}
+
+function testCheckInDebug(params) {
+  Logger.log('=== DEBUG TEST ===');
+  Logger.log('Type of params: ' + typeof params);
+  Logger.log('params value: ' + JSON.stringify(params));
+  Logger.log('params.zipCode: ' + params?.zipCode);
+  Logger.log('params.birthday: ' + params?.birthday);
+  Logger.log('params.gender: ' + params?.gender);
+  
+  return {
+    ok: true,
+    debug: {
+      paramsType: typeof params,
+      paramsValue: params,
+      hasZipCode: !!params?.zipCode,
+      hasBirthday: !!params?.birthday,
+      hasGender: !!params?.gender
+    }
+  };
+}
+
+/**
+ * Simulates guest check-in over a 4-hour period, setting 'Y' in Column AB 
+ * and a staggered timestamp in Column AC for every row that has an original
+ * form submission timestamp (Column A is not empty).
+ */
+function simulateCheckIn() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const cleanSheetName = 'Form Responses (Clean)';
+  const cleanSheet = ss.getSheetByName(cleanSheetName);
+
+  if (!cleanSheet) {
+    Logger.log(`❌ Error: Sheet '${cleanSheetName}' not found.`);
+    SpreadsheetApp.getUi().alert(`Error: Sheet '${cleanSheetName}' not found.`);
+    return;
+  }
+
+  const dataRange = cleanSheet.getDataRange();
+  const values = dataRange.getValues();
+  const numRows = values.length;
+  const numGuests = numRows - 1; // Exclude header row
+
+  if (numGuests <= 0) {
+    Logger.log('ℹ️ No guest data found to process.');
+    return;
+  }
+
+  // Column Indices (0-indexed)
+  const TIMESTAMP_COL = 0; // Column A
+  const CHECKED_IN_COL = 27; // Column AB
+  const CHECKIN_TIME_COL = 28; // Column AC
+
+  // Define the time window for simulation
+  const checkInStart = new Date();
+  // Set the start time back 4 hours for simulation's beginning
+  checkInStart.setHours(checkInStart.getHours() - 4);
+  const totalMilliseconds = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
+
+  // Calculate the time increment between each guest check-in
+  // The goal is to evenly spread numGuests check-ins over 4 hours
+  const timeIncrementMs = numGuests > 1 ? Math.floor(totalMilliseconds / (numGuests - 1)) : 0;
+
+  let checkedInCount = 0;
+  
+  // Array to hold new check-in data to write in one go
+  const checkInValues = [];
+
+  // Start from row 1 (index 1) to skip headers
+  for (let i = 1; i < numRows; i++) {
+    const row = values[i];
+    const originalTimestamp = row[TIMESTAMP_COL];
+
+    // CRITICAL CONDITION: ONLY CHECK-IN IF COLUMN A IS NOT EMPTY
+    if (originalTimestamp) {
+      
+      // Calculate staggered check-in time
+      const staggeredTime = new Date(checkInStart.getTime() + (timeIncrementMs * checkedInCount));
+      
+      // Prepare the values to write: 'Y' for AB and the Date object for AC
+      checkInValues.push({
+        row: i + 1, // 1-indexed row number
+        checkedIn: 'Y',
+        checkInTime: staggeredTime
+      });
+      
+      checkedInCount++;
+    }
+  }
+
+  // Batch writing the data back to the sheet for efficiency
+  if (checkInValues.length > 0) {
+    
+    // Create a 2D array for the batch update
+    // We only need to update Columns AB and AC, which is 2 columns wide
+    const updateArray = cleanSheet.getRange(2, 1, numGuests, 30).getValues();
+    
+    checkInValues.forEach(item => {
+      // row index in the updateArray is 1 less than the sheet row number
+      const arrayIndex = item.row - 2; 
+      
+      // Update Column AB (index 27) and AC (index 28) within the row
+      updateArray[arrayIndex][CHECKED_IN_COL] = item.checkedIn;
+      updateArray[arrayIndex][CHECKIN_TIME_COL] = item.checkInTime;
+    });
+
+    // Write the entire updated block back to the sheet
+    cleanSheet.getRange(2, 1, numGuests, 30).setValues(updateArray);
+    
+    SpreadsheetApp.flush();
+    
+    SpreadsheetApp.getUi().alert(
+      `✅ Check-in Simulation Complete! ${checkedInCount} guests checked in over 4 hours.`
+    );
+    Logger.log(`Successfully simulated check-in for ${checkedInCount} guests.`);
+    
+  } else {
+    SpreadsheetApp.getUi().alert(
+      'ℹ️ No guests were checked in. Check if Column A has timestamps.'
+    );
+  }
+}
