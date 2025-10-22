@@ -1021,6 +1021,105 @@ function getMatchmakerData() {
 }
 
 /**
+ * Get wall guest data for visualization
+ * Returns all checked-in guests with UIDs, screen names, photos, and positions
+ */
+function getWallData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const cleanSheet = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.SOURCE);
+
+  if (!cleanSheet) {
+    return [];
+  }
+
+  const data = cleanSheet.getDataRange().getValues();
+  const headers = data[0];
+  const rows = data.slice(1);
+
+  const checkedInIdx = ANALYTICS_CONFIG.COLS.CHECKED_IN;
+  const uidIdx = ANALYTICS_CONFIG.COLS.UID;
+  const screenNameIdx = ANALYTICS_CONFIG.COLS.SCREEN_NAME;
+  const photoIdx = ANALYTICS_CONFIG.COLS.PHOTO_URL;
+  const zodiacIdx = ANALYTICS_CONFIG.COLS.ZODIAC;
+  const genderIdx = ANALYTICS_CONFIG.COLS.GENDER;
+  const ageIdx = ANALYTICS_CONFIG.COLS.AGE_RANGE;
+  const zipIdx = ANALYTICS_CONFIG.COLS.ZIP;
+
+  // Filter for checked-in guests only
+  const checkedInGuests = rows.filter(row => row[checkedInIdx] === 'Y');
+
+  // Generate positions in a circle for visualization
+  const angleStep = (2 * Math.PI) / checkedInGuests.length;
+
+  return checkedInGuests.map((row, idx) => {
+    const angle = idx * angleStep;
+    return {
+      uid: row[uidIdx],
+      screenName: row[screenNameIdx] || row[uidIdx],
+      photo: row[photoIdx] || '',
+      zodiac: row[zodiacIdx] || '',
+      gender: row[genderIdx] || '',
+      ageRange: row[ageIdx] || '',
+      zip: row[zipIdx] || '',
+      x: Math.cos(angle),  // Normalized position (-1 to 1)
+      y: Math.sin(angle)   // Normalized position (-1 to 1)
+    };
+  });
+}
+
+/**
+ * Get detailed wall connections for sequential category visualization
+ * Returns connection data grouped by analysis category
+ */
+function getDetailedWallConnections() {
+  const wallConnections = getWallConnectionsData();
+
+  if (wallConnections.error) {
+    return { analyses: [] };
+  }
+
+  // Convert wall connections to analysis format expected by wall.html
+  const analyses = [];
+
+  Object.keys(wallConnections).forEach(category => {
+    const connections = wallConnections[category];
+
+    // Group by option within category
+    const optionGroups = {};
+
+    connections.forEach(conn => {
+      if (!optionGroups[conn.option]) {
+        optionGroups[conn.option] = {
+          category: category,
+          option: conn.option,
+          color: conn.color,
+          edges: []
+        };
+      }
+
+      optionGroups[conn.option].edges.push({
+        source: conn.uidA,
+        target: conn.uidB,
+        type: conn.connectionType
+      });
+    });
+
+    // Add each option group as a separate analysis
+    Object.values(optionGroups).forEach(group => {
+      analyses.push({
+        name: `${category}: ${group.option}`,
+        category: category,
+        option: group.option,
+        color: group.color,
+        connections: group.edges
+      });
+    });
+  });
+
+  return { analyses };
+}
+
+/**
  * Get DDD violations for wall display
  */
 function getDDDViolationsData() {
@@ -1046,4 +1145,15 @@ function getDDDViolationsData() {
       description: row[5]
     }))
   };
+}
+
+/**
+ * Alias functions for backward compatibility with Code.gs naming
+ */
+function getDDDViolations() {
+  return getDDDViolationsData().violations || [];
+}
+
+function getCompatibilityMatches() {
+  return getMatchmakerData();
 }
