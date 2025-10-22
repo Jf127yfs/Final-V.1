@@ -1,0 +1,1159 @@
+/**
+ * Analytics.gs - Master Analytics Orchestrator for Party System
+ *
+ * PURPOSE:
+ * Consolidates all analytics functions for The Wall 2025:
+ * - Pan_Master_OneHot: One-hot encoding for correlations & network analysis
+ * - V_Cramer: Guest x guest and category x category similarity scores
+ * - Wall Connections: Sequential category analysis for visualization
+ * - MM Similarities: Interest + general similarity scoring
+ * - Analytics Ticker: Real-time stats for wall display
+ * - Master Trigger: Auto-refresh system for checked-in guests only
+ *
+ * FILTERS: All analytics run on checked-in guests only (Column AB = "Y")
+ */
+
+// ============================================
+// SECTION 1: Configuration & Constants
+// ============================================
+
+const ANALYTICS_CONFIG = {
+  // Sheet names
+  SHEETS: {
+    SOURCE: 'Form Responses (Clean)',
+    PAN_MASTER: 'Pan_Master',
+    PAN_DICT: 'Pan_Dict',
+    PAN_ONEHOT: 'Pan_Master_OneHot',
+    V_CRAMER_GUESTS: 'V_Cramers_Guests',
+    V_CRAMER_CATEGORIES: 'V_Cramers_Categories',
+    EDGES_TOP_SIM: 'Edges_Top_Sim',
+    GUEST_SIMILARITY: 'Guest_Similarity',
+    WALL_CONNECTIONS: 'Wall_Connections',
+    WALL_TICKER: 'Wall_Ticker_Stats',
+    DDD: 'DDD'
+  },
+
+  // Column indices (0-based) in Form Responses (Clean)
+  COLS: {
+    TIMESTAMP: 0,
+    BIRTHDAY: 1,
+    ZODIAC: 2,
+    AGE_RANGE: 3,
+    EDUCATION: 4,
+    ZIP: 5,
+    ETHNICITY: 6,
+    GENDER: 7,
+    ORIENTATION: 8,
+    INDUSTRY: 9,
+    ROLE: 10,
+    KNOW_HOSTS: 11,
+    KNOWN_LONGEST: 12,
+    KNOW_SCORE: 13,
+    INTERESTS_RAW: 14,
+    INTEREST_1: 15,
+    INTEREST_2: 16,
+    INTEREST_3: 17,
+    MUSIC_PREF: 18,
+    FAV_ARTIST: 19,
+    SONG_REQUEST: 20,
+    RECENT_PURCHASE: 21,
+    AT_WORST: 22,
+    SOCIAL_STANCE: 23,
+    SCREEN_NAME: 24,
+    UID: 25,
+    DDD_SCORE: 26,
+    CHECKED_IN: 27,
+    CHECKIN_TIME: 28,
+    PHOTO_URL: 29
+  },
+
+  // Thresholds
+  SIMILARITY_THRESHOLD: 0.55,  // Strong pairs
+  TICKER_REFRESH_MINS: 30,
+
+  // Categories for sequential wall analysis
+  WALL_CATEGORIES: [
+    { name: 'Age Range', column: 'code_age_range', colors: ['#ff0000', '#0000ff', '#00ff00', '#ffff00'] },
+    { name: 'Zodiac', column: 'code_zodiac', colors: ['#ff00ff', '#00ffff', '#ff8800', '#8800ff'] },
+    { name: 'Music Preference', column: 'code_music_pref', colors: ['#ff0088', '#00ff88', '#8800ff', '#ffaa00'] },
+    { name: 'Interests', column: ['code_interest_1', 'code_interest_2', 'code_interest_3'], colors: ['#00ff00', '#00dd00', '#00bb00'] },
+    { name: 'Ethnicity', column: 'code_ethnicity', colors: ['#ffffff', '#aaaaaa', '#888888'] },
+    { name: 'Gender', column: 'code_gender', colors: ['#ff0088', '#0088ff', '#88ff00'] }
+  ]
+};
+
+// ============================================
+// SECTION 2: Master Orchestrator
+// ============================================
+
+/**
+ * Main analytics pipeline - runs all analytics in sequence
+ * Call this function to rebuild everything from scratch
+ */
+function runFullAnalyticsPipeline() {
+  const startTime = new Date();
+  Logger.log('=== ANALYTICS PIPELINE START ===');
+
+  try {
+    // Step 1: Refresh Pan_Master (already exists, verify it's up to date)
+    Logger.log('Step 1: Verifying Pan_Master...');
+    const panMasterExists = verifyPanMaster();
+    if (!panMasterExists) {
+      throw new Error('Pan_Master sheet not found or empty. Please run buildPanMaster() first.');
+    }
+
+    // Step 2: Build one-hot encoding
+    Logger.log('Step 2: Building Pan_Master_OneHot...');
+    buildPanMasterOneHot();
+
+    // Step 3: Calculate V_Cramer for guests
+    Logger.log('Step 3: Calculating V_Cramer guest similarities...');
+    calculateVCramerGuests();
+
+    // Step 4: Calculate V_Cramer for categories
+    Logger.log('Step 4: Calculating V_Cramer category correlations...');
+    calculateVCramerCategories();
+
+    // Step 5: Generate top similarity edges
+    Logger.log('Step 5: Generating Edges_Top_Sim...');
+    generateEdgesTopSim();
+
+    // Step 6: Build enriched guest similarities
+    Logger.log('Step 6: Building Guest_Similarity...');
+    buildGuestSimilarity();
+
+    // Step 7: Build wall connections
+    Logger.log('Step 7: Building Wall_Connections...');
+    buildWallConnections();
+
+    // Step 8: Build analytics ticker
+    Logger.log('Step 8: Building Wall_Ticker_Stats...');
+    buildAnalyticsTicker();
+
+    const endTime = new Date();
+    const duration = (endTime - startTime) / 1000;
+
+    Logger.log(`=== ANALYTICS PIPELINE COMPLETE (${duration}s) ===`);
+
+    return {
+      success: true,
+      duration: duration,
+      timestamp: endTime
+    };
+
+  } catch (error) {
+    Logger.log('ERROR in analytics pipeline: ' + error.toString());
+    throw error;
+  }
+}
+
+/**
+ * Quick refresh - only updates time-sensitive data
+ * Use this for triggered updates (every 30 min)
+ */
+function refreshAnalyticsQuick() {
+  Logger.log('Quick analytics refresh...');
+
+  // Only rebuild dynamic data
+  buildWallConnections();
+  buildAnalyticsTicker();
+
+  Logger.log('Quick refresh complete');
+}
+
+// ============================================
+// SECTION 3: Pan_Master_OneHot Builder
+// ============================================
+
+/**
+ * Builds one-hot encoded version of Pan_Master
+ * Used for statistical correlations and network analysis
+ * Only includes checked-in guests (AB = "Y")
+ */
+function buildPanMasterOneHot() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const panMaster = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.PAN_MASTER);
+  const panDict = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.PAN_DICT);
+
+  if (!panMaster || !panDict) {
+    throw new Error('Pan_Master or Pan_Dict sheet not found');
+  }
+
+  // Get Pan_Master data
+  const masterData = panMaster.getDataRange().getValues();
+  const masterHeaders = masterData[0];
+  const masterRows = masterData.slice(1);
+
+  // Get Pan_Dict for value mappings
+  const dictData = panDict.getDataRange().getValues();
+  const dictRows = dictData.slice(1);
+
+  // Build category → values mapping
+  const categoryMap = {};
+  dictRows.forEach(row => {
+    const [category, value, code] = row;
+    if (!categoryMap[category]) {
+      categoryMap[category] = [];
+    }
+    categoryMap[category].push({ value, code });
+  });
+
+  // Identify code_ columns in Pan_Master
+  const codeColumns = [];
+  masterHeaders.forEach((header, idx) => {
+    if (header.startsWith('code_')) {
+      const category = header.replace('code_', '');
+      codeColumns.push({ idx, category, header });
+    }
+  });
+
+  // Build one-hot headers
+  const oneHotHeaders = ['UID', 'Screen_Name', 'Photo_URL'];
+  const oneHotMapping = []; // Track which column maps to what
+
+  codeColumns.forEach(col => {
+    const categoryValues = categoryMap[col.category] || [];
+    categoryValues.forEach(catVal => {
+      const oneHotColName = `oh_${col.category}_${catVal.value.replace(/[^a-zA-Z0-9]/g, '_')}`;
+      oneHotHeaders.push(oneHotColName);
+      oneHotMapping.push({
+        sourceIdx: col.idx,
+        category: col.category,
+        value: catVal.value,
+        code: catVal.code
+      });
+    });
+  });
+
+  // Add numeric columns as-is
+  const numericCols = ['code_know_score', 'code_social_stance', 'has_fav_artist', 'has_song'];
+  numericCols.forEach(numCol => {
+    const idx = masterHeaders.indexOf(numCol);
+    if (idx !== -1) {
+      oneHotHeaders.push(numCol);
+      oneHotMapping.push({ sourceIdx: idx, numeric: true });
+    }
+  });
+
+  // Build one-hot data rows
+  const oneHotRows = [oneHotHeaders];
+
+  masterRows.forEach(row => {
+    const uid = row[masterHeaders.indexOf('UID')];
+    const screenName = row[masterHeaders.indexOf('Screen_Name')];
+    const photoUrl = row[masterHeaders.indexOf('Photo_URL')] || '';
+
+    const oneHotRow = [uid, screenName, photoUrl];
+
+    // Process each one-hot column
+    oneHotMapping.forEach(mapping => {
+      if (mapping.numeric) {
+        // Copy numeric value as-is
+        oneHotRow.push(row[mapping.sourceIdx] || 0);
+      } else {
+        // One-hot encode: 1 if matches, 0 otherwise
+        const cellValue = row[mapping.sourceIdx];
+        oneHotRow.push(cellValue === mapping.code ? 1 : 0);
+      }
+    });
+
+    oneHotRows.push(oneHotRow);
+  });
+
+  // Write to Pan_Master_OneHot sheet
+  let oneHotSheet = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.PAN_ONEHOT);
+  if (oneHotSheet) {
+    oneHotSheet.clear();
+  } else {
+    oneHotSheet = ss.insertSheet(ANALYTICS_CONFIG.SHEETS.PAN_ONEHOT);
+  }
+
+  if (oneHotRows.length > 0) {
+    oneHotSheet.getRange(1, 1, oneHotRows.length, oneHotRows[0].length).setValues(oneHotRows);
+
+    // Format header row
+    oneHotSheet.getRange(1, 1, 1, oneHotRows[0].length)
+      .setFontWeight('bold')
+      .setBackground('#000000')
+      .setFontColor('#00ff00');
+  }
+
+  Logger.log(`Pan_Master_OneHot created: ${oneHotRows.length - 1} guests, ${oneHotHeaders.length} columns`);
+
+  SpreadsheetApp.flush();
+}
+
+// ============================================
+// SECTION 4: V_Cramer Calculations
+// ============================================
+
+/**
+ * Calculate Cramér's V for all guest pairs
+ * Returns separate similarity scores per category
+ */
+function calculateVCramerGuests() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const oneHotSheet = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.PAN_ONEHOT);
+
+  if (!oneHotSheet) {
+    throw new Error('Pan_Master_OneHot not found. Run buildPanMasterOneHot() first.');
+  }
+
+  const data = oneHotSheet.getDataRange().getValues();
+  const headers = data[0];
+  const rows = data.slice(1);
+
+  // Build guest similarity matrix
+  const guestSimilarities = [];
+  guestSimilarities.push(['UID_A', 'UID_B', 'Interest_Similarity', 'Demographic_Similarity', 'General_Similarity', 'Overall_Score']);
+
+  // Calculate pairwise similarities
+  for (let i = 0; i < rows.length; i++) {
+    for (let j = i + 1; j < rows.length; j++) {
+      const uidA = rows[i][0];
+      const uidB = rows[j][0];
+
+      // Calculate separate similarity scores
+      const interestSim = calculateInterestSimilarity(rows[i], rows[j], headers);
+      const demoSim = calculateDemographicSimilarity(rows[i], rows[j], headers);
+      const generalSim = calculateGeneralSimilarity(rows[i], rows[j], headers);
+
+      // Overall score (equal weighting for now)
+      const overallScore = (interestSim + demoSim + generalSim) / 3;
+
+      guestSimilarities.push([uidA, uidB, interestSim, demoSim, generalSim, overallScore]);
+    }
+  }
+
+  // Write to V_Cramers_Guests sheet
+  let guestSheet = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.V_CRAMER_GUESTS);
+  if (guestSheet) {
+    guestSheet.clear();
+  } else {
+    guestSheet = ss.insertSheet(ANALYTICS_CONFIG.SHEETS.V_CRAMER_GUESTS);
+  }
+
+  if (guestSimilarities.length > 1) {
+    guestSheet.getRange(1, 1, guestSimilarities.length, 6).setValues(guestSimilarities);
+
+    // Format
+    guestSheet.getRange(1, 1, 1, 6)
+      .setFontWeight('bold')
+      .setBackground('#000000')
+      .setFontColor('#00ff00');
+  }
+
+  Logger.log(`V_Cramers_Guests calculated: ${guestSimilarities.length - 1} pairs`);
+  SpreadsheetApp.flush();
+}
+
+/**
+ * Calculate interest similarity between two guests
+ * Based on shared interests / total unique interests
+ */
+function calculateInterestSimilarity(rowA, rowB, headers) {
+  // Find interest columns (code_interest_1, code_interest_2, code_interest_3)
+  const interestIndices = [];
+  headers.forEach((h, idx) => {
+    if (h.startsWith('code_interest_')) {
+      interestIndices.push(idx);
+    }
+  });
+
+  if (interestIndices.length === 0) return 0;
+
+  const interestsA = interestIndices.map(idx => rowA[idx]).filter(v => v);
+  const interestsB = interestIndices.map(idx => rowB[idx]).filter(v => v);
+
+  // Count shared interests
+  const sharedCount = interestsA.filter(i => interestsB.includes(i)).length;
+  const uniqueCount = new Set([...interestsA, ...interestsB]).size;
+
+  return uniqueCount > 0 ? sharedCount / uniqueCount : 0;
+}
+
+/**
+ * Calculate demographic similarity (age, gender, ethnicity, orientation)
+ */
+function calculateDemographicSimilarity(rowA, rowB, headers) {
+  const demoColumns = ['code_age_range', 'code_gender', 'code_ethnicity', 'code_orientation'];
+  let matches = 0;
+  let total = 0;
+
+  demoColumns.forEach(colName => {
+    const idx = headers.indexOf(colName);
+    if (idx !== -1) {
+      total++;
+      if (rowA[idx] === rowB[idx]) {
+        matches++;
+      }
+    }
+  });
+
+  return total > 0 ? matches / total : 0;
+}
+
+/**
+ * Calculate general similarity (music, zodiac, social stance, etc.)
+ */
+function calculateGeneralSimilarity(rowA, rowB, headers) {
+  const generalColumns = ['code_zodiac', 'code_music_pref', 'code_social_stance', 'code_at_worst'];
+  let matches = 0;
+  let total = 0;
+
+  generalColumns.forEach(colName => {
+    const idx = headers.indexOf(colName);
+    if (idx !== -1) {
+      total++;
+      if (rowA[idx] === rowB[idx]) {
+        matches++;
+      }
+    }
+  });
+
+  return total > 0 ? matches / total : 0;
+}
+
+/**
+ * Calculate Cramér's V for category x category correlations
+ */
+function calculateVCramerCategories() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const oneHotSheet = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.PAN_ONEHOT);
+
+  if (!oneHotSheet) {
+    throw new Error('Pan_Master_OneHot not found');
+  }
+
+  const data = oneHotSheet.getDataRange().getValues();
+  const headers = data[0];
+
+  // Identify categorical columns (oh_ prefix)
+  const catColumns = [];
+  headers.forEach((h, idx) => {
+    if (h.startsWith('oh_')) {
+      const category = h.split('_')[1]; // Extract category name
+      if (!catColumns.find(c => c.category === category)) {
+        catColumns.push({ category, startIdx: idx });
+      }
+    }
+  });
+
+  // Calculate Cramér's V for each category pair
+  const correlations = [];
+  correlations.push(['Category_A', 'Category_B', 'Cramers_V', 'Association']);
+
+  for (let i = 0; i < catColumns.length; i++) {
+    for (let j = i + 1; j < catColumns.length; j++) {
+      const catA = catColumns[i].category;
+      const catB = catColumns[j].category;
+
+      // Calculate Cramér's V (simplified - using correlation)
+      const v = calculateCramersV(data, headers, catA, catB);
+      const association = v > 0.5 ? 'Strong' : v > 0.3 ? 'Moderate' : 'Weak';
+
+      correlations.push([catA, catB, v, association]);
+    }
+  }
+
+  // Write to V_Cramers_Categories sheet
+  let catSheet = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.V_CRAMER_CATEGORIES);
+  if (catSheet) {
+    catSheet.clear();
+  } else {
+    catSheet = ss.insertSheet(ANALYTICS_CONFIG.SHEETS.V_CRAMER_CATEGORIES);
+  }
+
+  if (correlations.length > 1) {
+    catSheet.getRange(1, 1, correlations.length, 4).setValues(correlations);
+    catSheet.getRange(1, 1, 1, 4)
+      .setFontWeight('bold')
+      .setBackground('#000000')
+      .setFontColor('#00ff00');
+  }
+
+  Logger.log(`V_Cramers_Categories calculated: ${correlations.length - 1} pairs`);
+  SpreadsheetApp.flush();
+}
+
+/**
+ * Calculate Cramér's V between two categorical variables
+ * Simplified implementation using correlation
+ */
+function calculateCramersV(data, headers, catA, catB) {
+  // Get columns for both categories
+  const colsA = headers.map((h, idx) => h.startsWith(`oh_${catA}_`) ? idx : -1).filter(i => i !== -1);
+  const colsB = headers.map((h, idx) => h.startsWith(`oh_${catB}_`) ? idx : -1).filter(i => i !== -1);
+
+  if (colsA.length === 0 || colsB.length === 0) return 0;
+
+  // Build contingency table
+  let chiSquare = 0;
+  let n = data.length - 1; // Exclude header
+
+  for (let i = 0; i < colsA.length; i++) {
+    for (let j = 0; j < colsB.length; j++) {
+      let observed = 0;
+      for (let row = 1; row < data.length; row++) {
+        if (data[row][colsA[i]] === 1 && data[row][colsB[j]] === 1) {
+          observed++;
+        }
+      }
+
+      const expected = (1 / colsA.length) * (1 / colsB.length) * n;
+      if (expected > 0) {
+        chiSquare += Math.pow(observed - expected, 2) / expected;
+      }
+    }
+  }
+
+  // Calculate Cramér's V
+  const minDim = Math.min(colsA.length, colsB.length) - 1;
+  if (minDim <= 0 || n <= 0) return 0;
+
+  const v = Math.sqrt(chiSquare / (n * minDim));
+  return Math.min(v, 1); // Cap at 1
+}
+
+// ============================================
+// SECTION 5: Edges & Guest Similarity
+// ============================================
+
+/**
+ * Generate top similarity edges (> 0.55 threshold)
+ */
+function generateEdgesTopSim() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const guestSheet = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.V_CRAMER_GUESTS);
+
+  if (!guestSheet) {
+    throw new Error('V_Cramers_Guests not found');
+  }
+
+  const data = guestSheet.getDataRange().getValues();
+  const rows = data.slice(1);
+
+  // Filter for strong pairs (> 0.55)
+  const strongPairs = [['UID_A', 'UID_B', 'Interest_Sim', 'Demo_Sim', 'General_Sim', 'Overall_Score']];
+
+  rows.forEach(row => {
+    const overallScore = row[5];
+    if (overallScore > ANALYTICS_CONFIG.SIMILARITY_THRESHOLD) {
+      strongPairs.push(row);
+    }
+  });
+
+  // Write to Edges_Top_Sim
+  let edgesSheet = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.EDGES_TOP_SIM);
+  if (edgesSheet) {
+    edgesSheet.clear();
+  } else {
+    edgesSheet = ss.insertSheet(ANALYTICS_CONFIG.SHEETS.EDGES_TOP_SIM);
+  }
+
+  if (strongPairs.length > 1) {
+    edgesSheet.getRange(1, 1, strongPairs.length, 6).setValues(strongPairs);
+    edgesSheet.getRange(1, 1, 1, 6)
+      .setFontWeight('bold')
+      .setBackground('#000000')
+      .setFontColor('#00ff00');
+  }
+
+  Logger.log(`Edges_Top_Sim generated: ${strongPairs.length - 1} strong pairs`);
+  SpreadsheetApp.flush();
+}
+
+/**
+ * Build enriched guest similarity with photos, zodiac, interests
+ */
+function buildGuestSimilarity() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const edgesSheet = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.EDGES_TOP_SIM);
+  const cleanSheet = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.SOURCE);
+
+  if (!edgesSheet || !cleanSheet) {
+    throw new Error('Required sheets not found');
+  }
+
+  const edges = edgesSheet.getDataRange().getValues().slice(1);
+  const cleanData = cleanSheet.getDataRange().getValues();
+  const cleanHeaders = cleanData[0];
+  const cleanRows = cleanData.slice(1);
+
+  // Build UID → guest info map
+  const guestMap = {};
+  const uidIdx = cleanHeaders.indexOf('UID');
+  const screenNameIdx = cleanHeaders.indexOf('Screen Name');
+  const photoIdx = cleanHeaders.indexOf('PHOTO_URL_COL');
+  const zodiacIdx = cleanHeaders.indexOf('Zodiac Sign');
+  const int1Idx = cleanHeaders.indexOf('Interest_1');
+  const int2Idx = cleanHeaders.indexOf('Interest_2');
+  const int3Idx = cleanHeaders.indexOf('Interest_3');
+
+  cleanRows.forEach(row => {
+    const uid = row[uidIdx];
+    guestMap[uid] = {
+      screenName: row[screenNameIdx],
+      photo: row[photoIdx] || '',
+      zodiac: row[zodiacIdx],
+      interests: [row[int1Idx], row[int2Idx], row[int3Idx]].filter(i => i).join(', ')
+    };
+  });
+
+  // Enrich edges
+  const enrichedRows = [['UID_A', 'UID_B', 'Screen_Name_A', 'Screen_Name_B', 'Photo_A', 'Photo_B', 'Zodiac_A', 'Zodiac_B', 'Interests_A', 'Interests_B', 'Interest_Sim', 'Demo_Sim', 'General_Sim', 'Overall_Score']];
+
+  edges.forEach(edge => {
+    const [uidA, uidB, intSim, demoSim, genSim, overall] = edge;
+    const guestA = guestMap[uidA] || {};
+    const guestB = guestMap[uidB] || {};
+
+    enrichedRows.push([
+      uidA, uidB,
+      guestA.screenName || '', guestB.screenName || '',
+      guestA.photo || '', guestB.photo || '',
+      guestA.zodiac || '', guestB.zodiac || '',
+      guestA.interests || '', guestB.interests || '',
+      intSim, demoSim, genSim, overall
+    ]);
+  });
+
+  // Write to Guest_Similarity
+  let simSheet = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.GUEST_SIMILARITY);
+  if (simSheet) {
+    simSheet.clear();
+  } else {
+    simSheet = ss.insertSheet(ANALYTICS_CONFIG.SHEETS.GUEST_SIMILARITY);
+  }
+
+  if (enrichedRows.length > 1) {
+    simSheet.getRange(1, 1, enrichedRows.length, 14).setValues(enrichedRows);
+    simSheet.getRange(1, 1, 1, 14)
+      .setFontWeight('bold')
+      .setBackground('#000000')
+      .setFontColor('#00ff00');
+  }
+
+  Logger.log(`Guest_Similarity built: ${enrichedRows.length - 1} enriched pairs`);
+  SpreadsheetApp.flush();
+}
+
+// ============================================
+// SECTION 6: Wall Connections Report
+// ============================================
+
+/**
+ * Build sequential category analysis for Wall display
+ * Returns connections grouped by category with color coding
+ */
+function buildWallConnections() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const panMaster = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.PAN_MASTER);
+
+  if (!panMaster) {
+    throw new Error('Pan_Master not found');
+  }
+
+  const data = panMaster.getDataRange().getValues();
+  const headers = data[0];
+  const rows = data.slice(1);
+
+  // Build connections for each category
+  const connections = [['Category', 'Option', 'Color', 'UID_A', 'UID_B', 'Connection_Type']];
+
+  ANALYTICS_CONFIG.WALL_CATEGORIES.forEach(cat => {
+    const { name, column, colors } = cat;
+
+    if (Array.isArray(column)) {
+      // Handle interest columns (multiple columns)
+      column.forEach((col, colIdx) => {
+        const colIndex = headers.indexOf(col);
+        if (colIndex !== -1) {
+          const grouped = groupByValue(rows, colIndex, headers);
+          Object.keys(grouped).forEach((val, valIdx) => {
+            const uids = grouped[val];
+            const color = colors[colIdx % colors.length];
+
+            // Create connections for all pairs in this group
+            for (let i = 0; i < uids.length; i++) {
+              for (let j = i + 1; j < uids.length; j++) {
+                connections.push([name, val, color, uids[i], uids[j], 'Same Interest']);
+              }
+            }
+          });
+        }
+      });
+    } else {
+      // Handle single column categories
+      const colIndex = headers.indexOf(column);
+      if (colIndex !== -1) {
+        const grouped = groupByValue(rows, colIndex, headers);
+        Object.keys(grouped).forEach((val, valIdx) => {
+          const uids = grouped[val];
+          const color = colors[valIdx % colors.length];
+
+          // Create connections for all pairs in this group
+          for (let i = 0; i < uids.length; i++) {
+            for (let j = i + 1; j < uids.length; j++) {
+              connections.push([name, val, color, uids[i], uids[j], `Same ${name}`]);
+            }
+          }
+        });
+      }
+    }
+  });
+
+  // Write to Wall_Connections
+  let wallSheet = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.WALL_CONNECTIONS);
+  if (wallSheet) {
+    wallSheet.clear();
+  } else {
+    wallSheet = ss.insertSheet(ANALYTICS_CONFIG.SHEETS.WALL_CONNECTIONS);
+  }
+
+  if (connections.length > 1) {
+    wallSheet.getRange(1, 1, connections.length, 6).setValues(connections);
+    wallSheet.getRange(1, 1, 1, 6)
+      .setFontWeight('bold')
+      .setBackground('#000000')
+      .setFontColor('#00ff00');
+  }
+
+  Logger.log(`Wall_Connections built: ${connections.length - 1} connections`);
+  SpreadsheetApp.flush();
+}
+
+/**
+ * Group guests by a specific value
+ */
+function groupByValue(rows, colIndex, headers) {
+  const uidIdx = headers.indexOf('UID');
+  const grouped = {};
+
+  rows.forEach(row => {
+    const value = row[colIndex];
+    const uid = row[uidIdx];
+
+    if (value) {
+      if (!grouped[value]) {
+        grouped[value] = [];
+      }
+      grouped[value].push(uid);
+    }
+  });
+
+  return grouped;
+}
+
+// ============================================
+// SECTION 7: Analytics Ticker
+// ============================================
+
+/**
+ * Build real-time stats for Wall ticker display
+ */
+function buildAnalyticsTicker() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const cleanSheet = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.SOURCE);
+  const dddSheet = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.DDD);
+  const edgesSheet = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.EDGES_TOP_SIM);
+  const vCramerCat = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.V_CRAMER_CATEGORIES);
+
+  if (!cleanSheet) {
+    throw new Error('Form Responses (Clean) not found');
+  }
+
+  const cleanData = cleanSheet.getDataRange().getValues();
+  const cleanHeaders = cleanData[0];
+  const cleanRows = cleanData.slice(1);
+
+  // Calculate stats
+  const checkedInIdx = cleanHeaders.indexOf('Checked-In');
+  const genderIdx = cleanHeaders.indexOf('Self-Identified Gender');
+  const orientationIdx = cleanHeaders.indexOf('Self-Identified Sexual Orientation');
+  const ethnicityIdx = cleanHeaders.indexOf('Self Identified Ethnicity');
+  const dddScoreIdx = cleanHeaders.indexOf('DDD_Score');
+
+  const totalInvited = cleanRows.length;
+  const totalCheckedIn = cleanRows.filter(r => r[checkedInIdx] === 'Y').length;
+
+  // Gender breakdown
+  const genderCounts = {};
+  cleanRows.forEach(r => {
+    if (r[checkedInIdx] === 'Y') {
+      const gender = r[genderIdx];
+      genderCounts[gender] = (genderCounts[gender] || 0) + 1;
+    }
+  });
+
+  // Orientation breakdown
+  const orientationCounts = {};
+  cleanRows.forEach(r => {
+    if (r[checkedInIdx] === 'Y') {
+      const orientation = r[orientationIdx];
+      orientationCounts[orientation] = (orientationCounts[orientation] || 0) + 1;
+    }
+  });
+
+  // Ethnicity breakdown
+  const ethnicityCounts = {};
+  cleanRows.forEach(r => {
+    if (r[checkedInIdx] === 'Y') {
+      const ethnicity = r[ethnicityIdx];
+      ethnicityCounts[ethnicity] = (ethnicityCounts[ethnicity] || 0) + 1;
+    }
+  });
+
+  // DDD score distribution
+  const dddScores = cleanRows
+    .filter(r => r[checkedInIdx] === 'Y')
+    .map(r => r[dddScoreIdx] || 0);
+  const avgDDD = dddScores.length > 0 ? dddScores.reduce((a, b) => a + b, 0) / dddScores.length : 0;
+
+  // Violation count
+  const violations = dddSheet ? dddSheet.getDataRange().getValues().length - 1 : 0;
+
+  // Strong connections
+  const strongConnections = edgesSheet ? edgesSheet.getDataRange().getValues().length - 1 : 0;
+
+  // Strongest correlation
+  let strongestCorr = 'N/A';
+  if (vCramerCat) {
+    const corrData = vCramerCat.getDataRange().getValues().slice(1);
+    if (corrData.length > 0) {
+      corrData.sort((a, b) => b[2] - a[2]);
+      strongestCorr = `${corrData[0][0]} ↔ ${corrData[0][1]} (${corrData[0][2].toFixed(2)})`;
+    }
+  }
+
+  // Build ticker stats
+  const tickerStats = [
+    ['Stat', 'Value'],
+    ['Total Checked In', totalCheckedIn],
+    ['Total Invited', totalInvited],
+    ['Check-In Rate', `${((totalCheckedIn / totalInvited) * 100).toFixed(1)}%`],
+    ['Avg DDD Score', avgDDD.toFixed(2)],
+    ['DDD Violations', violations],
+    ['Strong Connections', strongConnections],
+    ['Strongest Correlation', strongestCorr],
+    ['Last Updated', new Date().toLocaleString()]
+  ];
+
+  // Add gender breakdown
+  Object.keys(genderCounts).forEach(gender => {
+    tickerStats.push([`Gender: ${gender}`, genderCounts[gender]]);
+  });
+
+  // Add orientation breakdown
+  Object.keys(orientationCounts).forEach(orientation => {
+    tickerStats.push([`Orientation: ${orientation}`, orientationCounts[orientation]]);
+  });
+
+  // Add ethnicity breakdown
+  Object.keys(ethnicityCounts).forEach(ethnicity => {
+    tickerStats.push([`Ethnicity: ${ethnicity}`, ethnicityCounts[ethnicity]]);
+  });
+
+  // Write to Wall_Ticker_Stats
+  let tickerSheet = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.WALL_TICKER);
+  if (tickerSheet) {
+    tickerSheet.clear();
+  } else {
+    tickerSheet = ss.insertSheet(ANALYTICS_CONFIG.SHEETS.WALL_TICKER);
+  }
+
+  tickerSheet.getRange(1, 1, tickerStats.length, 2).setValues(tickerStats);
+  tickerSheet.getRange(1, 1, 1, 2)
+    .setFontWeight('bold')
+    .setBackground('#000000')
+    .setFontColor('#00ff00');
+
+  Logger.log(`Wall_Ticker_Stats built: ${tickerStats.length} stats`);
+  SpreadsheetApp.flush();
+}
+
+// ============================================
+// SECTION 8: Validation & Triggers
+// ============================================
+
+/**
+ * Verify Pan_Master exists and has data
+ */
+function verifyPanMaster() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const panMaster = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.PAN_MASTER);
+
+  if (!panMaster) return false;
+
+  const lastRow = panMaster.getLastRow();
+  return lastRow > 1; // Has header + at least one data row
+}
+
+/**
+ * Setup trigger for auto-refresh (every 30 minutes)
+ */
+function setupAnalyticsTrigger() {
+  // Delete existing triggers
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(trigger => {
+    if (trigger.getHandlerFunction() === 'refreshAnalyticsQuick') {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+
+  // Create new trigger (every 30 minutes)
+  ScriptApp.newTrigger('refreshAnalyticsQuick')
+    .timeBased()
+    .everyMinutes(ANALYTICS_CONFIG.TICKER_REFRESH_MINS)
+    .create();
+
+  Logger.log('Analytics trigger installed (30min refresh)');
+}
+
+/**
+ * Remove analytics trigger
+ */
+function removeAnalyticsTrigger() {
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(trigger => {
+    if (trigger.getHandlerFunction() === 'refreshAnalyticsQuick') {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+
+  Logger.log('Analytics trigger removed');
+}
+
+// ============================================
+// SECTION 9: Frontend API Functions
+// ============================================
+
+/**
+ * Get wall connections for display
+ * Returns sequential category data with colors
+ */
+function getWallConnectionsData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const wallSheet = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.WALL_CONNECTIONS);
+
+  if (!wallSheet) {
+    return { error: 'Wall_Connections not found. Run buildWallConnections() first.' };
+  }
+
+  const data = wallSheet.getDataRange().getValues();
+  const headers = data[0];
+  const rows = data.slice(1);
+
+  // Group by category
+  const categories = {};
+
+  rows.forEach(row => {
+    const [category, option, color, uidA, uidB, connType] = row;
+
+    if (!categories[category]) {
+      categories[category] = [];
+    }
+
+    categories[category].push({
+      option,
+      color,
+      uidA,
+      uidB,
+      connectionType: connType
+    });
+  });
+
+  return categories;
+}
+
+/**
+ * Get ticker stats for wall display
+ */
+function getWallTickerStats() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const tickerSheet = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.WALL_TICKER);
+
+  if (!tickerSheet) {
+    return { error: 'Wall_Ticker_Stats not found. Run buildAnalyticsTicker() first.' };
+  }
+
+  const data = tickerSheet.getDataRange().getValues();
+
+  const stats = {};
+  data.forEach(row => {
+    stats[row[0]] = row[1];
+  });
+
+  return stats;
+}
+
+/**
+ * Get MM (matchmaker) similarity data
+ */
+function getMatchmakerData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const simSheet = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.GUEST_SIMILARITY);
+
+  if (!simSheet) {
+    return { error: 'Guest_Similarity not found. Run buildGuestSimilarity() first.' };
+  }
+
+  const data = simSheet.getDataRange().getValues();
+  const headers = data[0];
+  const rows = data.slice(1);
+
+  return rows.map(row => ({
+    uidA: row[0],
+    uidB: row[1],
+    screenNameA: row[2],
+    screenNameB: row[3],
+    photoA: row[4],
+    photoB: row[5],
+    zodiacA: row[6],
+    zodiacB: row[7],
+    interestsA: row[8],
+    interestsB: row[9],
+    interestSim: row[10],
+    demoSim: row[11],
+    generalSim: row[12],
+    overallScore: row[13]
+  }));
+}
+
+/**
+ * Get wall guest data for visualization
+ * Returns all checked-in guests with UIDs, screen names, photos, and positions
+ */
+function getWallData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const cleanSheet = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.SOURCE);
+
+  if (!cleanSheet) {
+    return [];
+  }
+
+  const data = cleanSheet.getDataRange().getValues();
+  const headers = data[0];
+  const rows = data.slice(1);
+
+  const checkedInIdx = ANALYTICS_CONFIG.COLS.CHECKED_IN;
+  const uidIdx = ANALYTICS_CONFIG.COLS.UID;
+  const screenNameIdx = ANALYTICS_CONFIG.COLS.SCREEN_NAME;
+  const photoIdx = ANALYTICS_CONFIG.COLS.PHOTO_URL;
+  const zodiacIdx = ANALYTICS_CONFIG.COLS.ZODIAC;
+  const genderIdx = ANALYTICS_CONFIG.COLS.GENDER;
+  const ageIdx = ANALYTICS_CONFIG.COLS.AGE_RANGE;
+  const zipIdx = ANALYTICS_CONFIG.COLS.ZIP;
+
+  // Filter for checked-in guests only
+  const checkedInGuests = rows.filter(row => row[checkedInIdx] === 'Y');
+
+  // Generate positions in a circle for visualization
+  const angleStep = (2 * Math.PI) / checkedInGuests.length;
+
+  return checkedInGuests.map((row, idx) => {
+    const angle = idx * angleStep;
+    return {
+      uid: row[uidIdx],
+      screenName: row[screenNameIdx] || row[uidIdx],
+      photo: row[photoIdx] || '',
+      zodiac: row[zodiacIdx] || '',
+      gender: row[genderIdx] || '',
+      ageRange: row[ageIdx] || '',
+      zip: row[zipIdx] || '',
+      x: Math.cos(angle),  // Normalized position (-1 to 1)
+      y: Math.sin(angle)   // Normalized position (-1 to 1)
+    };
+  });
+}
+
+/**
+ * Get detailed wall connections for sequential category visualization
+ * Returns connection data grouped by analysis category
+ */
+function getDetailedWallConnections() {
+  const wallConnections = getWallConnectionsData();
+
+  if (wallConnections.error) {
+    return { analyses: [] };
+  }
+
+  // Convert wall connections to analysis format expected by wall.html
+  const analyses = [];
+
+  Object.keys(wallConnections).forEach(category => {
+    const connections = wallConnections[category];
+
+    // Group by option within category
+    const optionGroups = {};
+
+    connections.forEach(conn => {
+      if (!optionGroups[conn.option]) {
+        optionGroups[conn.option] = {
+          category: category,
+          option: conn.option,
+          color: conn.color,
+          edges: []
+        };
+      }
+
+      optionGroups[conn.option].edges.push({
+        source: conn.uidA,
+        target: conn.uidB,
+        type: conn.connectionType
+      });
+    });
+
+    // Add each option group as a separate analysis
+    Object.values(optionGroups).forEach(group => {
+      analyses.push({
+        name: `${category}: ${group.option}`,
+        category: category,
+        option: group.option,
+        color: group.color,
+        connections: group.edges
+      });
+    });
+  });
+
+  return { analyses };
+}
+
+/**
+ * Get DDD violations for wall display
+ */
+function getDDDViolationsData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const dddSheet = ss.getSheetByName(ANALYTICS_CONFIG.SHEETS.DDD);
+
+  if (!dddSheet) {
+    return { count: 0, violations: [] };
+  }
+
+  const data = dddSheet.getDataRange().getValues();
+  const headers = data[0];
+  const rows = data.slice(1);
+
+  return {
+    count: rows.length,
+    violations: rows.map(row => ({
+      screenName: row[0],
+      uid: row[1],
+      dddScore: row[2],
+      penalties: row[3],
+      violationType: row[4],
+      description: row[5]
+    }))
+  };
+}
+
+/**
+ * Alias functions for backward compatibility with Code.gs naming
+ */
+function getDDDViolations() {
+  return getDDDViolationsData().violations || [];
+}
+
+function getCompatibilityMatches() {
+  return getMatchmakerData();
+}
