@@ -1,0 +1,21 @@
+function testCheckInDiagnostic() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const cleanSheet = ss.getSheetByName('Form Responses (Clean)');
+  
+  if (!cleanSheet) {
+    Logger.log('ERROR: Form Responses (Clean) sheet not found!');
+    return;
+  }
+  
+  const data = cleanSheet.getDataRange().getValues();
+  const headers = data[0];
+  
+  Logger.log('Sheet found with ' + (data.length - 1) + ' rows');
+  Logger.log('Headers: ' + headers.join(', '));
+  
+  // Show first data row
+  if (data.length > 1) {
+    Logger.log('First UID: ' + data[1][25]); // Should be UID column
+    Logger.log('First Screen Name: ' + data[1][24]); // Should be Screen Name column
+  }
+}
