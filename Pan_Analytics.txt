@@ -1,0 +1,717 @@
+/**
+ * ============================================================================
+ * PAN_ANALYTICS.GS - UNIFIED Analytics System
+ * ============================================================================
+ *
+ * PURPOSE:
+ * - Orchestrates all analytics workflows (cleaning, DDD, distributions, correlations)
+ * - Builds Pan_Master and Pan_Dict for statistical analysis
+ * - Provides unified menu system for all analytics functions
+ *
+ * SECTIONS:
+ * 1. Configuration
+ * 2. Menu System
+ * 3. Orchestrator Functions (runAllAnalytics, etc.)
+ * 4. Pan_Master Builder (buildPanSheets, buildMaster_, etc.)
+ * 5. Utility Functions
+ * ============================================================================
+ */
+
+// ============================================================================
+// SECTION 1: CONFIGURATION
+// ============================================================================
+
+// Source and output sheets
+const PA_SOURCE_SHEET = 'Form Responses 1';
+const PA_CLEAN_SHEET = 'Form Responses (Clean)';
+const PA_DISTS_SHEET = 'Distributions (Clean)';
+const PAN_DICT_SHEET = 'Pan_Dict';
+const PAN_MASTER_SHEET = 'Pan_Master';
+
+// Required headers for validation
+const PA_REQUIRED_HEADERS = [
+  'Current 5 Digit Zip Code',
+  'Self-Identified Gender',
+  'Birthday (MM/DD)',
+  'Screen Name',
+  'UID',
+  'Checked-In at Event',
+  'Check-In Timestamp',
+  'Photo URL'
+];
+
+// Headers for distribution analysis
+const PA_DIST_HEADERS = [
+  'Zodiac Sign',
+  'Age Range',
+  'Education Level',
+  'Self Identified Ethnicity',
+  'Self-Identified Gender',
+  'Self-Identified Sexual Orientation',
+  'Employment Information (Industry)',
+  'Employment Information (Role)',
+  'Do you know the Host(s)?',
+  'Which host have you known the longest?',
+  'Music Preference',
+  'Which best describes your general social stance?'
+];
+
+// Variable specification for Pan_Master
+const SPEC = [
+  { key: 'timestamp', header: 'Timestamp', type: 'timestamp' },
+  { key: 'birthday', header: 'Birthday (MM/DD)', type: 'birthday' },
+  { key: 'zodiac', header: 'Zodiac Sign', type: 'single',
+    opts: ['Aries','Taurus','Gemini','Cancer','Leo','Virgo','Libra','Scorpio','Sagittarius','Capricorn','Aquarius','Pisces'] },
+  { key: 'age_range', header: 'Age Range', type: 'single',
+    opts: ['21-24','25-29','30-34','35-39','40-44','45-49','50+'] },
+  { key: 'education', header: 'Education Level', type: 'single',
+    opts: ['High School','Some College','Associates','Bachelors','Masters & Above'] },
+  { key: 'zip', header: 'Current 5 Digit Zip Code', type: 'text_raw' },
+  { key: 'ethnicity', header: 'Self Identified Ethnicity', type: 'single',
+    opts: ['Black / African American','Mixed / Multiracial','White','Asian / Pacific Islander','Hispanic / Latino','Native American','Not Listed','Prefer Not to Say'] },
+  { key: 'gender', header: 'Self-Identified Gender', type: 'single',
+    opts: ['Man','Woman','Non-Binary','Other'] },
+  { key: 'orientation', header: 'Self-Identified Sexual Orientation', type: 'single',
+    opts: ['Straight / Heterosexual','Bisexual','Gay','Lesbian','Pansexual','Queer','Asexual','Other'] },
+  { key: 'industry', header: 'Employment Information (Industry)', type: 'single',
+    opts: ['Arts & Entertainment','Education','Finance / Business Services','Government / Military','Healthcare','Hospitality / Retail','Science / Research','Technology','Trades / Manufacturing','Other'] },
+  { key: 'role', header: 'Employment Information (Role)', type: 'single',
+    opts: ['Creative / Designer / Artist','Educator / Instructor','Founder / Entrepreneur','Healthcare / Service Provider','Manager / Supervisor','Operations / Admin / Support','Researcher / Scientist','Sales / Marketing / Business Development','Student / Trainee','Technical / Engineer / Developer','Trades / Skilled Labor','Other'] },
+  { key: 'know_hosts', header: 'Do you know the Host(s)?', type: 'single',
+    opts: ['No','Yes — less than 3 months','Yes — 3–12 months','Yes — 1–3 years','Yes — 3–5 years','Yes — 5–10 years','Yes — more than 10 years'] },
+  { key: 'known_longest', header: 'Which host have you known the longest?', type: 'single',
+    opts: ['Jacob','Michael','Equal','Do Not Know Them'] },
+  { key: 'know_score', header: 'If yes, how well do you know them?', type: 'number' },
+  { key: 'interests', header: 'Your General Interests (Choose 3)', type: 'multi',
+    opts: ['Cooking','Music','Fashion','Travel','Fitness','Gaming','Reading','Art/Design','Photography','Hiking/Outdoors','Sports (general)','Volunteering','Health Sciences','TikTok (watching)','Other'] },
+  { key: 'music_pref', header: 'Music Preference', type: 'single',
+    opts: ['Hip-hop','Pop','Indie/Alt','R&B','Rock','Country','Electronic','Jazz','Classical','A mix of all','Other'] },
+  { key: 'fav_artist', header: 'Current Favorite Artist', type: 'text' },
+  { key: 'song', header: 'Name one song you want to hear at the party.', type: 'text' },
+  { key: 'recent_purchase', header: 'Recent purchase you\'re most happy about', type: 'single',
+    opts: ['Fashion/Clothing','Fitness gear','Tech gadget','Car/Motorcycle','Home/Kitchen','Pet item','Course/App','Other'] },
+  { key: 'at_worst', header: 'At your worst you are…', type: 'single',
+    opts: ['Anxious','Distracted','Guarded','Impulsive','Jealous','Overly critical','Reckless','Self-conscious','Stubborn','Other'] },
+  { key: 'social_stance', header: 'Which best describes your general social stance?', type: 'number' }
+];
+
+// ============================================================================
+// SECTION 2: MENU SYSTEM
+// ============================================================================
+
+function onOpen() {
+  var ui = SpreadsheetApp.getUi();
+  ui.createMenu('📊 Analytics')
+    .addItem('▶️ Run All Analytics', 'runAllAnalytics')
+    .addSeparator()
+    .addItem('🔨 Build Pan Sheets', 'buildPanSheets')
+    .addItem('📊 Build Distributions', 'buildDistributions')
+    .addItem('📈 Build Cramér\'s V', 'buildCramersVClean')
+    .addSeparator()
+    .addItem('🔍 Run DDD (All)', 'runDDDAll')
+    .addItem('🔍 Run DDD (Checked-In Only)', 'runDDDCheckedIn')
+    .addSeparator()
+    .addItem('✅ Check Setup', 'checkSetup')
+    .addToUi();
+}
+
+// ============================================================================
+// SECTION 3: ORCHESTRATOR FUNCTIONS
+// ============================================================================
+
+/**
+ * Runs the complete analytics workflow end-to-end
+ * WARNING: This runs 5 heavy processes and may take 2-5 minutes
+ *
+ * Process:
+ * 1. Clean data (cleanFormResponses)
+ * 2. DDD analysis on all responses
+ * 3. DDD analysis on checked-in guests only
+ * 4. Build frequency distributions
+ * 5. Calculate Cramér's V correlation matrix
+ */
+function runAllAnalytics() {
+  var ui = SpreadsheetApp.getUi();
+ 
+  // Confirmation dialog
+  var response = ui.alert(
+    'Run All Analytics',
+    'This will run the complete analytics workflow:\n\n' +
+    '1. Clean data\n' +
+    '2. DDD analysis (all)\n' +
+    '3. DDD analysis (checked-in)\n' +
+    '4. Build distributions\n' +
+    '5. Build Cramér\'s V matrix\n\n' +
+    'This may take 2-5 minutes. Continue?',
+    ui.ButtonSet.YES_NO
+  );
+ 
+  if (response !== ui.Button.YES) return;
+ 
+  try {
+    var ss = SpreadsheetApp.getActive();
+   
+    // 1) Clean data
+    ss.toast('Step 1/5: Cleaning data...', 'Analytics', 10);
+    if (typeof cleanFormResponses === 'function') {
+      cleanFormResponses();
+    } else {
+      Logger.log('cleanFormResponses not found, skipping');
+    }
+
+    // 2) DDD over all cleaned rows
+    ss.toast('Step 2/5: Running DDD (all responses)...', 'Analytics', 10);
+    if (typeof detectDataDisruptors === 'function') {
+      detectDataDisruptors();
+    } else {
+      Logger.log('detectDataDisruptors not found, skipping');
+    }
+
+    // 3) DDD over checked-in guests only
+    ss.toast('Step 3/5: Running DDD (checked-in only)...', 'Analytics', 10);
+    if (typeof detectDataDisruptorsForCheckedIn === 'function') {
+      detectDataDisruptorsForCheckedIn();
+    } else {
+      Logger.log('detectDataDisruptorsForCheckedIn not found, skipping');
+    }
+
+    // 4) Distributions
+    ss.toast('Step 4/5: Building distributions...', 'Analytics', 10);
+    buildDistributions();
+
+    // 5) Cramér's V
+    ss.toast('Step 5/5: Building Cramér\'s V matrix...', 'Analytics', 10);
+    if (typeof buildCramersVClean === 'function') {
+      buildCramersVClean();
+    } else if (typeof buildVCramers === 'function') {
+      buildVCramers();
+    } else {
+      Logger.log('No Cramér\'s V function found, skipping');
+    }
+
+    ui.alert(
+      '✅ Analytics Complete!',
+      'All analytics have been generated:\n\n' +
+      '✓ Data cleaned\n' +
+      '✓ DDD reports\n' +
+      '✓ Distributions\n' +
+      '✓ Cramér\'s V matrix\n\n' +
+      'Check the respective sheets for results.',
+      ui.ButtonSet.OK
+    );
+  } catch (e) {
+    ui.alert('❌ Error', 'Error running analytics:\n\n' + e.message, ui.ButtonSet.OK);
+    Logger.log('Error in runAllAnalytics: ' + e);
+  }
+}
+
+function runDDDAll() {
+  if (typeof detectDataDisruptors !== 'function') {
+    SpreadsheetApp.getUi().alert('detectDataDisruptors() not found. Ensure DDD file is present.');
+    return;
+  }
+  detectDataDisruptors();
+}
+
+function runDDDCheckedIn() {
+  if (typeof detectDataDisruptorsForCheckedIn !== 'function') {
+    SpreadsheetApp.getUi().alert('detectDataDisruptorsForCheckedIn() not found. Ensure Automation file is present.');
+    return;
+  }
+  detectDataDisruptorsForCheckedIn();
+}
+
+/**
+ * Builds frequency distributions for categorical variables
+ * Creates a summary sheet with counts for each category
+ */
+function buildDistributions() {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(PA_CLEAN_SHEET);
+ 
+  if (!sh) {
+    SpreadsheetApp.getUi().alert('Clean sheet "' + PA_CLEAN_SHEET + '" not found. Run cleanFormResponses() first.');
+    return;
+  }
+
+  var data = sh.getDataRange().getValues();
+  if (data.length < 2) {
+    writeDistSheet_([]);
+    return;
+  }
+
+  var headers = data[0].map(function(h) { return String(h || '').trim(); });
+  var rows = data.slice(1);
+
+  var sections = [];
+  for (var i = 0; i < PA_DIST_HEADERS.length; i++) {
+    var label = PA_DIST_HEADERS[i];
+    var col = headers.indexOf(label);
+   
+    if (col === -1) {
+      sections.push({ label: label, rows: [['(missing column)', 0]] });
+      continue;
+    }
+   
+    var counts = {};
+    for (var r = 0; r < rows.length; r++) {
+      var v = normCat_(rows[r][col]);
+      if (!v) continue;
+      counts[v] = (counts[v] || 0) + 1;
+    }
+   
+    var table = [];
+    for (var key in counts) {
+      if (counts.hasOwnProperty(key)) {
+        table.push([String(key), Number(counts[key])]);
+      }
+    }
+    table.sort(function(a, b) { return b[1] - a[1]; });
+   
+    sections.push({
+      label: label,
+      rows: table.length > 0 ? table : [['(no data)', 0]]
+    });
+  }
+
+  writeDistSheet_(sections);
+  SpreadsheetApp.getActive().toast('Distributions built successfully', 'Success', 3);
+}
+
+function writeDistSheet_(sections) {
+  var ss = SpreadsheetApp.getActive();
+  var out = ss.getSheetByName(PA_DISTS_SHEET);
+  if (!out) out = ss.insertSheet(PA_DISTS_SHEET);
+  out.clear();
+
+  if (!sections || sections.length === 0) {
+    out.getRange(1, 1).setValue('No distributions available.');
+    return;
+  }
+
+  var row = 1;
+  for (var i = 0; i < sections.length; i++) {
+    var sec = sections[i];
+   
+    // Header row - set value first, then format
+    out.getRange(row, 1).setValue(sec.label);
+    out.getRange(row, 1, 1, 2).mergeAcross().setFontWeight('bold').setBackground('#e3f2fd');
+    row++;
+   
+    // Column labels
+    var labelRange = out.getRange(row, 1, 1, 2);
+    labelRange.setValues([['Value', 'Count']]);
+    labelRange.setFontWeight('bold');
+    row++;
+   
+    // Data rows - ensure proper 2D array structure
+    if (sec.rows && sec.rows.length > 0) {
+      // Verify each row has exactly 2 elements
+      var validRows = [];
+      for (var j = 0; j < sec.rows.length; j++) {
+        var r = sec.rows[j];
+        if (r && r.length >= 2) {
+          validRows.push([r[0], r[1]]);
+        } else if (r && r.length === 1) {
+          validRows.push([r[0], '']);
+        } else {
+          validRows.push(['(invalid)', 0]);
+        }
+      }
+     
+      if (validRows.length > 0) {
+        out.getRange(row, 1, validRows.length, 2).setValues(validRows);
+        row += validRows.length;
+      }
+    }
+   
+    // Spacer
+    row++;
+  }
+
+  out.autoResizeColumns(1, 2);
+}
+
+/**
+ * Verifies sheets, columns, and functions exist
+ */
+function checkSetup() {
+  var ss = SpreadsheetApp.getActive();
+  var ui = SpreadsheetApp.getUi();
+  var messages = [];
+
+  // Check sheets
+  var source = ss.getSheetByName(PA_SOURCE_SHEET);
+  var clean = ss.getSheetByName(PA_CLEAN_SHEET);
+  messages.push(source ? 'OK: Found source sheet "' + PA_SOURCE_SHEET + '"' : 'MISSING: Sheet "' + PA_SOURCE_SHEET + '"');
+  messages.push(clean ? 'OK: Found clean sheet "' + PA_CLEAN_SHEET + '"' : 'MISSING: Sheet "' + PA_CLEAN_SHEET + '"');
+
+  // Check columns in cleaned sheet
+  if (clean) {
+    try {
+      var headers = clean.getRange(1, 1, 1, clean.getLastColumn()).getValues()[0];
+      var headerSet = {};
+      for (var i = 0; i < headers.length; i++) {
+        headerSet[String(headers[i] || '').trim()] = true;
+      }
+     
+      for (var j = 0; j < PA_REQUIRED_HEADERS.length; j++) {
+        var h = PA_REQUIRED_HEADERS[j];
+        messages.push(headerSet[h] ? 'OK: Column present - ' + h : 'MISSING: Column - ' + h);
+      }
+    } catch (e) {
+      messages.push('ERROR reading headers: ' + e.message);
+    }
+  }
+
+  // Check functions
+  messages.push(typeof cleanFormResponses === 'function' ? 'OK: cleanFormResponses()' : 'MISSING: cleanFormResponses()');
+  messages.push(typeof detectDataDisruptors === 'function' ? 'OK: detectDataDisruptors()' : 'MISSING: detectDataDisruptors()');
+  messages.push(typeof detectDataDisruptorsForCheckedIn === 'function' ? 'OK: detectDataDisruptorsForCheckedIn()' : 'MISSING: detectDataDisruptorsForCheckedIn()');
+  messages.push(typeof buildCramersVClean === 'function' || typeof buildVCramers === 'function' ? 'OK: Cramér\'s V function' : 'MISSING: Cramér\'s V function');
+
+  Logger.log('Setup check:\n' + messages.join('\n'));
+  ui.alert('Setup Check', messages.join('\n'), ui.ButtonSet.OK);
+}
+
+// ============================================================================
+// SECTION 4: PAN_MASTER BUILDER
+// ============================================================================
+
+/**
+ * Builds Pan_Master and Pan_Dict from cleaned data
+ * Pan_Master: Analysis dataset with encoded categorical variables
+ * Pan_Dict: Data dictionary mapping values to codes
+ */
+function buildPanSheets() {
+  var ss = SpreadsheetApp.getActive();
+  var src = ss.getSheetByName(PA_CLEAN_SHEET);
+ 
+  if (!src) {
+    throw new Error('Source sheet "' + PA_CLEAN_SHEET + '" not found.');
+  }
+
+  var values = src.getDataRange().getValues();
+  if (values.length < 2) {
+    clearOrCreate_(PAN_DICT_SHEET);
+    clearOrCreate_(PAN_MASTER_SHEET);
+    SpreadsheetApp.getUi().alert('No data found in ' + PA_CLEAN_SHEET);
+    return;
+  }
+
+  var headers = values[0];
+  var idx = indexByHeader_(headers);
+  var dictRows = buildDictRows_(idx);
+ 
+  writeSheet_(PAN_DICT_SHEET, [['Key','Header','Type','Option','Code','Note']].concat(dictRows));
+ 
+  var master = buildMaster_(values.slice(1), idx);
+  writeSheet_(PAN_MASTER_SHEET, master);
+ 
+  SpreadsheetApp.getUi().alert(
+    'Pan Sheets Built!\n\n' +
+    'Pan_Dict: ' + dictRows.length + ' rows\n' +
+    'Pan_Master: ' + (master.length - 1) + ' guests (' + master[0].length + ' columns)'
+  );
+}
+
+function buildDictRows_(idx) {
+  var out = [];
+ 
+  for (var i = 0; i < SPEC.length; i++) {
+    var field = SPEC[i];
+    var present = !!idx[norm(field.header)];
+    var note = present ? (field.note || '') : 'Header not found';
+   
+    if (field.type === 'single' || field.type === 'multi') {
+      var opts = field.opts || [];
+      for (var j = 0; j < opts.length; j++) {
+        out.push([field.key, field.header, field.type, opts[j], j + 1, note]);
+      }
+    } else if (field.type === 'number') {
+      out.push([field.key, field.header, 'number', '', '', note]);
+    } else if (field.type === 'timestamp') {
+      out.push([field.key, field.header, 'timestamp', '', '', note]);
+    } else if (field.type === 'birthday') {
+      out.push([field.key, field.header, 'birthday', 'MM/DD', 'Birthday_MM/DD', note]);
+    } else if (field.type === 'text_raw') {
+      out.push([field.key, field.header, 'text', 'raw', '', note]);
+    } else {
+      out.push([field.key, field.header, 'text', '', '', note]);
+    }
+  }
+ 
+  return out;
+}
+
+function buildMaster_(rows, idx) {
+  var header = ['Screen Name', 'UID', 'Row', 'TimestampMs', 'Birthday_MM/DD'];
+ 
+  // Add columns by type
+  for (var i = 0; i < SPEC.length; i++) {
+    if (SPEC[i].type === 'text_raw') {
+      header.push(SPEC[i].key === 'zip' ? 'Zip' : SPEC[i].key);
+    }
+  }
+ 
+  for (var i = 0; i < SPEC.length; i++) {
+    if (SPEC[i].type === 'single') {
+      header.push('code_' + SPEC[i].key);
+    }
+  }
+ 
+  for (var i = 0; i < SPEC.length; i++) {
+    if (SPEC[i].type === 'multi') {
+      var opts = SPEC[i].opts || [];
+      for (var j = 0; j < opts.length; j++) {
+        header.push('oh_' + SPEC[i].key + '_' + opts[j]);
+      }
+    }
+  }
+ 
+  for (var i = 0; i < SPEC.length; i++) {
+    if (SPEC[i].type === 'number') {
+      header.push('code_' + SPEC[i].key);
+    }
+  }
+ 
+  for (var i = 0; i < SPEC.length; i++) {
+    if (SPEC[i].type === 'text') {
+      header.push('has_' + SPEC[i].key);
+    }
+  }
+ 
+  var out = [header];
+ 
+  // Build code maps
+  var codeMaps = {};
+  for (var i = 0; i < SPEC.length; i++) {
+    var f = SPEC[i];
+    if (f.type === 'single' || f.type === 'multi') {
+      var m = {};
+      var opts = f.opts || [];
+      for (var j = 0; j < opts.length; j++) {
+        m[norm(opts[j])] = j + 1;
+      }
+      codeMaps[f.key] = m;
+    }
+  }
+ 
+  // Process each row
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (!hasValue_(r[0])) continue;
+   
+    // NOTE: Form Responses (Clean) already contains only validated guests
+    // No need to filter by check-in status here
+   
+    var outRow = [];
+    var rowNum = i + 2;
+   
+    var snIdx = getIdx_(idx, 'Screen Name');
+    var uidIdx = getIdx_(idx, 'UID');
+    outRow.push(snIdx ? String(r[snIdx - 1] || '').trim() : '');
+    outRow.push(uidIdx ? String(r[uidIdx - 1] || '').trim() : '');
+    outRow.push(rowNum);
+   
+    var tsIdx = getIdx_(idx, 'Timestamp');
+    outRow.push(toEpochMs_(tsIdx ? r[tsIdx - 1] : ''));
+   
+    var bIdx = getIdx_(idx, 'Birthday (MM/DD)');
+    outRow.push(toMMDDString_(bIdx ? r[bIdx - 1] : ''));
+   
+    // Raw text fields
+    for (var j = 0; j < SPEC.length; j++) {
+      if (SPEC[j].type === 'text_raw') {
+        var cIdx = getIdx_(idx, SPEC[j].header);
+        outRow.push(String(cIdx ? r[cIdx - 1] || '' : '').trim());
+      }
+    }
+   
+    // Single-choice fields
+    for (var j = 0; j < SPEC.length; j++) {
+      if (SPEC[j].type === 'single') {
+        var cIdx = getIdx_(idx, SPEC[j].header);
+        var val = cIdx ? r[cIdx - 1] : '';
+        var m = codeMaps[SPEC[j].key];
+        var s = String(val || '').trim();
+        outRow.push(s ? (m && m[norm(s)]) || '' : '');
+      }
+    }
+   
+    // Multi-choice fields
+    for (var j = 0; j < SPEC.length; j++) {
+      if (SPEC[j].type === 'multi') {
+        var cIdx = getIdx_(idx, SPEC[j].header);
+        var val = cIdx ? r[cIdx - 1] : '';
+        var picks = splitMulti_(val);
+        var set = {};
+        for (var k = 0; k < picks.length; k++) {
+          set[norm(picks[k])] = true;
+        }
+        var opts = SPEC[j].opts || [];
+        for (var k = 0; k < opts.length; k++) {
+          outRow.push(set[norm(opts[k])] ? 1 : 0);
+        }
+      }
+    }
+   
+    // Numeric fields
+    for (var j = 0; j < SPEC.length; j++) {
+      if (SPEC[j].type === 'number') {
+        var cIdx = getIdx_(idx, SPEC[j].header);
+        var val = cIdx ? r[cIdx - 1] : '';
+        var n = toNumber_(val);
+        outRow.push(isFinite(n) ? n : '');
+      }
+    }
+   
+    // Text presence fields
+    for (var j = 0; j < SPEC.length; j++) {
+      if (SPEC[j].type === 'text') {
+        var cIdx = getIdx_(idx, SPEC[j].header);
+        var val = cIdx ? r[cIdx - 1] : '';
+        outRow.push(hasText_(val) ? 1 : 0);
+      }
+    }
+   
+    out.push(outRow);
+  }
+ 
+  return out;
+}
+
+// ============================================================================
+// SECTION 5: UTILITY FUNCTIONS
+// ============================================================================
+
+function norm(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function normCat_(v) {
+  if (v == null) return '';
+  if (v instanceof Date) return '';
+  var s = String(v).trim();
+  return s ? s.replace(/\s+/g, ' ') : '';
+}
+
+function indexByHeader_(headers) {
+  var map = {};
+  for (var i = 0; i < headers.length; i++) {
+    map[norm(headers[i])] = i + 1;
+  }
+  return map;
+}
+
+function getIdx_(idxMap, header) {
+  return idxMap[norm(header)] || 0;
+}
+
+function splitMulti_(v) {
+  if (v instanceof Array) return v;
+  var s = String(v || '').trim();
+  if (!s) return [];
+  return s.split(/[;,]/).map(function(x) { return x.trim(); }).filter(function(x) { return x; });
+}
+
+function toEpochMs_(v) {
+  if (v instanceof Date) return v.getTime();
+  if (typeof v === 'number' && isFinite(v)) return v;
+  if (typeof v === 'string' && v.trim()) {
+    var d = new Date(v);
+    if (!isNaN(d.getTime())) return d.getTime();
+  }
+  return '';
+}
+
+function toMMDDString_(v) {
+  if (v instanceof Date) {
+    var m = String(v.getMonth() + 1);
+    var d = String(v.getDate());
+    return (m.length < 2 ? '0' + m : m) + '/' + (d.length < 2 ? '0' + d : d);
+  }
+  var s = String(v || '').trim();
+  if (!s) return '';
+  var parts = s.split(/[\/.\-]/).map(function(p) { return p.trim(); }).filter(function(p) { return p; });
+  if (parts.length >= 2) {
+    var m = String(parts[0]);
+    var d = String(parts[1]);
+    return (m.length < 2 ? '0' + m : m) + '/' + (d.length < 2 ? '0' + d : d);
+  }
+  return '';
+}
+
+function toNumber_(v) {
+  if (v === null || v === undefined || v === '') return NaN;
+  if (typeof v === 'number') return v;
+  return Number(String(v).trim());
+}
+
+function hasValue_(v) {
+  if (v === null || v === undefined) return false;
+  if (v instanceof Date) return true;
+  if (typeof v === 'number') return true;
+  if (typeof v === 'string') return v.trim() !== '';
+  return true;
+}
+
+function hasText_(v) {
+  return typeof v === 'string' ? v.trim().length > 0 : false;
+}
+
+function clearOrCreate_(name) {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(name);
+  if (!sh) {
+    sh = ss.insertSheet(name);
+  } else {
+    sh.clear();
+  }
+  return sh;
+}
+
+function writeSheet_(name, values) {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(name);
+  if (!sh) sh = ss.insertSheet(name);
+ 
+  sh.clear();
+  if (!values || !values.length) return;
+ 
+  // Verify all rows have the same number of columns
+  var expectedCols = values[0].length;
+  var validRows = [];
+ 
+  for (var i = 0; i < values.length; i++) {
+    var row = values[i];
+    if (row.length === expectedCols) {
+      validRows.push(row);
+    } else {
+      // Pad or trim row to match expected columns
+      var fixedRow = [];
+      for (var j = 0; j < expectedCols; j++) {
+        fixedRow.push(j < row.length ? row[j] : '');
+      }
+      validRows.push(fixedRow);
+      Logger.log('Warning: Row ' + i + ' had ' + row.length + ' columns, expected ' + expectedCols);
+    }
+  }
+ 
+  if (validRows.length === 0) return;
+ 
+  sh.getRange(1, 1, validRows.length, expectedCols).setValues(validRows);
+ 
+  // Format header row
+  if (validRows.length > 0) {
+    var headerRange = sh.getRange(1, 1, 1, expectedCols);
+    headerRange
+      .setBackground('#434343')
+      .setFontColor('#ffffff')
+      .setFontWeight('bold')
+      .setHorizontalAlignment('center');
+    sh.setFrozenRows(1);
+  }
+}
+
+

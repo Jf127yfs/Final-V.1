@@ -1,0 +1,422 @@
+/**
+ * ============================================================================
+ * ANALYTICS_REPORT_MASTER.GS - Consolidated Guest Label & Report Generator
+ * ============================================================================
+ * * PURPOSE:
+ * 1. Generates and calculates dynamic, fun labels (e.g., 'Old Soul') for guests
+ * in the Pan_Master sheet.
+ * 2. Creates a clean, summarized 'Label_Report' sheet for hosts, breaking down
+ * guest demographics by these labels.
+ * * WORKFLOW:
+ * Reads Pan_Master → Calculates and writes 'Guest Label' column → Creates
+ * and formats the 'Label_Report' sheet.
+ * * DEPENDENCIES:
+ * - Requires the Pan_Master sheet to be built and present.
+ * * AUTHOR: Gemini (for Halloween Party Analytics Team)
+ * LAST UPDATED: 2025-10-19
+ * ============================================================================
+ */
+
+// ============================================================================
+// CONFIGURATION & CONSTANTS
+// ============================================================================
+
+const MASTER_SHEET = 'Pan_Master';
+const REPORT_SHEET = 'Label_Report';
+const LABEL_COLUMN_NAME = 'Guest Label';
+
+// Party Date (The year doesn't matter for MM/DD comparisons)
+const PARTY_MONTH = 10;
+const PARTY_DAY = 25;
+const BIRTHDAY_WINDOW_DAYS = 10; // +/- 10 days from Oct 25
+
+// Old Soul Criteria: Age 21-29 (Younger Group) AND Pop Music (Older Group's dominant preference)
+// Age Codes for Young Cohort: 1:21-24, 2:25-29 (These are the base groups being analyzed)
+const OLD_SOUL_AGE_CODES = [1, 2];
+// Music Codes for Trait: Pop (1) is the preference correlated with 30-34 group.
+const OLD_SOUL_MUSIC_CODES = [1]; // Pop music code
+
+// Host VIP Criteria: Known Host for 3+ years
+// Codes: 5: Yes—3–5 years, 6: Yes—5–10 years, 7: Yes—more than 10 years
+const HOST_VIP_CODES = [5, 6, 7];
+
+// Party Starter Criteria: High score on social stance scale (4 or 5 on 1-5 scale)
+const PARTY_STARTER_THRESHOLD = 4;
+
+// Gaming Guru Criteria: Gaming Interest (1) AND specific music codes
+// Music Codes: Pop (1), Rock (2), Hip-hop (3), Electronic (4), Indie/Alt (6) (based on provided Pan_Dict)
+const GAMING_MUSIC_CODES = [1, 2, 3, 4, 6];
+
+
+// ============================================================================
+// MAIN EXECUTION FUNCTION
+// ============================================================================
+
+/**
+ * Creates custom menu when spreadsheet opens
+ */
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('📊 Analytics')
+    .addItem('🔨 Build Pan Sheets (Requires Pan_Analytics.gs)', 'PLACEHOLDER_FOR_PAN_SHEETS')
+    .addItem('⭐ Generate Master Label Report', 'generateMasterLabelReport')
+    .addToUi();
+}
+
+
+/**
+ * Master function to calculate labels, apply them to Pan_Master, and generate the Label_Report.
+ */
+function generateMasterLabelReport() {
+  const ss = SpreadsheetApp.getActive();
+  const sh = ss.getSheetByName(MASTER_SHEET);
+  const ui = SpreadsheetApp.getUi();
+
+  if (!sh) {
+    ui.alert('Error', `Source sheet "${MASTER_SHEET}" not found. Please ensure Pan_Master exists.`, ui.ButtonSet.OK);
+    return;
+  }
+
+  // --- PHASE 1: CALCULATE AND APPLY LABELS TO PAN_MASTER ---
+  ui.showSidebar(HtmlService.createHtmlOutput('Calculating labels...'));
+ 
+  // NOTE: dataRange and values MUST be re-read if a column is added.
+  let dataRange = sh.getDataRange();
+  let values = dataRange.getValues();
+  const headers = values[0];
+ 
+  // 1. Get column indices (0-based)
+  const idx = getColumnIndices_(headers);
+  if (!checkRequiredColumns_(ui, idx)) return; // Check required columns
+
+  // 2. Add or find the Label column
+  let labelColIndex = headers.indexOf(LABEL_COLUMN_NAME);
+  if (labelColIndex === -1) {
+    // Insert column and re-read data if column was missing
+    sh.insertColumnAfter(headers.length);
+    sh.getRange(1, headers.length + 1).setValue(LABEL_COLUMN_NAME);
+    labelColIndex = headers.length;
+   
+    // Re-fetch all data to include the new column
+    dataRange = sh.getDataRange();
+    values = dataRange.getValues();
+  }
+
+  // 3. Process data rows and generate labels
+  const partyDate = new Date(2000, PARTY_MONTH - 1, PARTY_DAY);
+  const labelsToApply = [];
+  const reportRows = [];
+  const labelSummary = {};
+ 
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const labels = [];
+   
+    // --- LABEL GENERATION LOGIC ---
+    if (isNearBirthday_(row[idx.birthday], partyDate)) {
+      addLabel(labels, '🎂 Happy Birthday!');
+    }
+    if (isOldSoul_(row[idx.age], row[idx.musicPref])) {
+      addLabel(labels, '👴 Old Soul');
+    }
+    if (isHostVIP_(row[idx.knowHosts])) {
+      addLabel(labels, '⭐ Host VIP');
+    }
+    if (isPartyStarter_(row[idx.social])) {
+      addLabel(labels, '🎉 Party Starter');
+    }
+    if (isGamingGuru_(row[idx.interests], row[idx.musicPref])) {
+      addLabel(labels, '🎮 Gaming Guru');
+    }
+    // --- END LABEL GENERATION LOGIC ---
+
+    const labelString = labels.join(', ');
+    labelsToApply.push([labelString]);
+   
+    // Prepare data for report and summary (Screen Name, UID, Label String)
+    const screenName = row[idx.screenName] || 'N/A';
+    const uid = row[idx.uid] || 'N/A';
+    reportRows.push([screenName, uid, labelString]);
+   
+    if (labelString) {
+      labels.forEach(label => {
+        labelSummary[label] = (labelSummary[label] || 0) + 1;
+      });
+    }
+  }
+
+  // 4. Write back the new column of labels to Pan_Master
+  if (labelsToApply.length > 0) {
+    sh.getRange(2, labelColIndex + 1, labelsToApply.length, 1).setValues(labelsToApply);
+  }
+
+  // --- PHASE 2: GENERATE LABEL REPORT SHEET ---
+  const reportSh = clearOrCreateReportSheet_();
+  const nextStartRow = writeSummarySection_(reportSh, labelSummary, reportRows.length);
+  writeDetailedGuestSection_(reportSh, reportRows, nextStartRow);
+ 
+  ui.alert('✅ Master Report Complete',
+    `1. 'Guest Label' column updated in Pan_Master.\n` +
+    `2. Detailed summary report created in "${REPORT_SHEET}".`,
+    ui.ButtonSet.OK
+  );
+}
+
+// ============================================================================
+// HELPER FUNCTIONS - LABEL GENERATION LOGIC
+// ============================================================================
+
+/**
+ * Helper to ensure a label is added only once.
+ */
+function addLabel(labels, label) {
+    if (!labels.includes(label)) {
+        labels.push(label);
+    }
+}
+
+/**
+ * Checks if the birthday (MM/DD string) is near the party date (Oct 25).
+ */
+function isNearBirthday_(birthdayMMDD, partyDate) {
+  if (typeof birthdayMMDD !== 'string' || birthdayMMDD.length < 4) return false;
+ 
+  const parts = birthdayMMDD.split('/').map(s => parseInt(s, 10));
+  if (parts.length < 2 || isNaN(parts[0]) || isNaN(parts[1])) return false;
+
+  const month = parts[0];
+  const day = parts[1];
+ 
+  // Use year 2000 for non-leap year parity for all date comparisons
+  const bDate = new Date(2000, month - 1, day);
+ 
+  // Calculate differences
+  const msInDay = 1000 * 60 * 60 * 24;
+  const diffDays = Math.abs((bDate.getTime() - partyDate.getTime()) / msInDay);
+ 
+  // Account for wrap-around (e.g., Oct 25 vs Jan 1) by checking adjacent years
+  const bDateLastYear = new Date(1999, month - 1, day);
+  const bDateNextYear = new Date(2001, month - 1, day);
+ 
+  const diffDaysWrapLast = Math.abs((bDateLastYear.getTime() - partyDate.getTime()) / msInDay);
+  const diffDaysWrapNext = Math.abs((bDateNextYear.getTime() - partyDate.getTime()) / msInDay);
+
+  // Check if any of the three year possibilities are within the window
+  return diffDays <= BIRTHDAY_WINDOW_DAYS ||
+         diffDaysWrapLast <= BIRTHDAY_WINDOW_DAYS ||
+         diffDaysWrapNext <= BIRTHDAY_WINDOW_DAYS;
+}
+
+/**
+ * Parses input value reliably into a number or returns NaN if it's invalid.
+ */
+function getNumericCode(value) {
+    if (value === null || value === undefined || value === '') return NaN;
+    // Attempt to convert strings (like '5') or keep numbers (like 5)
+    const num = Number(String(value).trim());
+    return isNaN(num) ? NaN : num;
+}
+
+
+/**
+ * Checks if a guest is an "Old Soul" based on combined age and music preference.
+ */
+function isOldSoul_(ageCode, musicPrefCode) {
+    const age = getNumericCode(ageCode);
+    const music = getNumericCode(musicPrefCode);
+   
+    // Fail immediately if codes are not valid numbers
+    if (isNaN(age) || isNaN(music)) return false;
+
+    // Age must be 21-29 (Codes 1 or 2)
+    const isYoungCohort = OLD_SOUL_AGE_CODES.includes(age);
+    // Music must be Pop (Code 1) which correlates with 30-34 group
+    const exhibitsOlderTrait = OLD_SOUL_MUSIC_CODES.includes(music);
+
+    return isYoungCohort && exhibitsOlderTrait;
+}
+
+/**
+ * Checks if the 'know hosts' code indicates a long-standing relationship (3+ years).
+ */
+function isHostVIP_(knowHostsCode) {
+    const code = getNumericCode(knowHostsCode);
+   
+    if (isNaN(code)) return false;
+    return HOST_VIP_CODES.includes(code);
+}
+
+/**
+ * Checks if the social stance code indicates an extrovert (4 or higher on 1-5 scale).
+ */
+function isPartyStarter_(socialStanceCode) {
+    const code = getNumericCode(socialStanceCode);
+   
+    if (isNaN(code)) return false;
+    return code >= PARTY_STARTER_THRESHOLD;
+}
+
+/**
+ * Checks for Gaming interest AND specific music genres popular in gaming culture.
+ */
+function isGamingGuru_(gamingInterest, musicPrefCode) {
+    // 'oh_interests_Gaming' is a binary column (1 or 0)
+    const isGaming = getNumericCode(gamingInterest) === 1;
+   
+    const musicCode = getNumericCode(musicPrefCode);
+    if (isNaN(musicCode)) return false;
+   
+    // Music Codes: Pop, Rock, Hip-hop, Electronic, Indie/Alt
+    const hasGamingMusic = GAMING_MUSIC_CODES.includes(musicCode);
+
+    return isGaming && hasGamingMusic;
+}
+
+// ============================================================================
+// HELPER FUNCTIONS - REPORT GENERATION (From label_report_builder.gs)
+// ============================================================================
+
+/**
+ * Locates required columns indices in the Pan_Master header.
+ */
+function getColumnIndices_(headers) {
+  // NOTE: headers.indexOf returns -1 if not found.
+  return {
+    screenName: headers.indexOf('Screen Name'),
+    uid: headers.indexOf('UID'),
+    birthday: headers.indexOf('Birthday_MM/DD'),
+    age: headers.indexOf('code_age_range'),
+    knowHosts: headers.indexOf('code_know_hosts'),
+    musicPref: headers.indexOf('code_music_pref'),
+    interests: headers.indexOf('oh_interests_Gaming'),
+    social: headers.indexOf('code_social_stance')
+  };
+}
+
+/**
+ * Checks if required columns exist and alerts the user if any are missing.
+ */
+function checkRequiredColumns_(ui, idx) {
+    const required = ['Screen Name', 'UID', 'Birthday_MM/DD', 'code_age_range', 'code_know_hosts', 'code_music_pref', 'oh_interests_Gaming', 'code_social_stance'];
+    const missing = [];
+   
+    // Loop through the named properties of the index map to check for -1
+    for (const key in idx) {
+        // Find the header name associated with the index key to check if it's one of the required fields
+        // This is a complex check, simplifying to ensure all values are >= 0
+        if (idx[key] === -1 && key !== 'uid') { // UID check is complex, focusing on the codes
+            // We use a general check to see if the index is -1 for critical codes
+            const headerNames = {
+                'screenName': 'Screen Name', 'uid': 'UID', 'birthday': 'Birthday_MM/DD',
+                'age': 'code_age_range', 'knowHosts': 'code_know_hosts', 'musicPref': 'code_music_pref',
+                'interests': 'oh_interests_Gaming', 'social': 'code_social_stance'
+            };
+            missing.push(headerNames[key] || key);
+        }
+    }
+   
+    if (missing.length > 0) {
+        // Final check on critical codes
+        const criticalMissing = missing.filter(name => required.includes(name));
+        if (criticalMissing.length > 0) {
+            ui.alert('Fatal Error', `Missing required columns in Pan_Master: ${criticalMissing.join(', ')}. Please run Pan_Analytics build functions first.`, ui.ButtonSet.OK);
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * Writes the summary table (Label, Count, Percentage) to the report sheet.
+ */
+function writeSummarySection_(sh, summary, totalGuests) {
+  const summaryHeader = ['Label Archetype', 'Guest Count', 'Percentage (%)'];
+  const summaryData = [];
+ 
+  const sortedLabels = Object.keys(summary).sort((a, b) => summary[b] - summary[a]);
+
+  sortedLabels.forEach(label => {
+    const count = summary[label];
+    const percentage = count / totalGuests;
+    summaryData.push([label, count, percentage]);
+  });
+ 
+  const totalRow = ['TOTAL GUESTS PROCESSED', totalGuests, totalGuests > 0 ? 1 : 0];
+
+  // Write title
+  sh.getRange(1, 1).setValue('LABEL ARCHETYPE SUMMARY');
+  sh.getRange(1, 1).setFontSize(16).setFontWeight('bold');
+
+  // Write summary data
+  const startRow = 3;
+  sh.getRange(startRow, 1, 1, summaryHeader.length).setValues([summaryHeader]);
+  sh.getRange(startRow + 1, 1, summaryData.length, summaryHeader.length).setValues(summaryData);
+ 
+  // Write total row
+  const totalRowIndex = startRow + summaryData.length + 1;
+  sh.getRange(totalRowIndex, 1, 1, summaryHeader.length).setValues([totalRow]);
+  sh.getRange(totalRowIndex, 1, 1, summaryHeader.length)
+    .setFontWeight('bold')
+    .setBackground('#eeeeee');
+
+  // Apply formatting to count and percentage columns
+  if (summaryData.length > 0) {
+    sh.getRange(startRow + 1, 3, summaryData.length, 1).setNumberFormat('0.0%');
+  }
+  sh.getRange(totalRowIndex, 3).setNumberFormat('0.0%');
+ 
+  // Format header
+  sh.getRange(startRow, 1, 1, summaryHeader.length)
+    .setBackground('#434343')
+    .setFontColor('#ffffff')
+    .setFontWeight('bold')
+    .setHorizontalAlignment('center');
+ 
+  return totalRowIndex + 2; // Return next available row for detailed section
+}
+
+/**
+ * Writes the detailed guest list section to the report sheet.
+ */
+function writeDetailedGuestSection_(sh, rows, startRow) {
+  const detailHeader = ['Screen Name', 'UID', LABEL_COLUMN_NAME];
+ 
+  // Start the detailed section title at the provided row index
+  sh.getRange(startRow, 1).setValue('GUEST BREAKDOWN BY LABEL');
+  sh.getRange(startRow, 1).setFontSize(16).setFontWeight('bold');
+ 
+  const dataStartRow = startRow + 2;
+ 
+  // Write header
+  sh.getRange(dataStartRow, 1, 1, detailHeader.length).setValues([detailHeader])
+    .setBackground('#434343')
+    .setFontColor('#ffffff')
+    .setFontWeight('bold');
+
+  // Write guest data
+  sh.getRange(dataStartRow + 1, 1, rows.length, detailHeader.length).setValues(rows);
+
+  // Set frozen rows to keep the detailed header visible
+  sh.setFrozenRows(dataStartRow);
+ 
+  // Auto-resize columns
+  sh.autoResizeColumns(1, detailHeader.length);
+}
+
+/**
+ * Utility function to clear existing report sheet or create new one.
+ */
+function clearOrCreateReportSheet_() {
+  const ss = SpreadsheetApp.getActive();
+  let sh = ss.getSheetByName(REPORT_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(REPORT_SHEET);
+  } else {
+    sh.clear();
+  }
+  sh.setFrozenRows(1);
+  return sh;
+}
+
+
+
