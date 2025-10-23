@@ -21,6 +21,11 @@
 // GLOBAL CONFIGURATION
 // ============================================================================
 
+/**
+ * Sheet name for clean survey responses
+ * Contains all guest data after form submission cleaning
+ */
+const REPORTS_CLEAN_SHEET = 'Form Responses (Clean)';
 
 // ============================================================================
 // REPORT 1: DEMOGRAPHICS SUMMARY
