@@ -86,9 +86,9 @@ function doGet(e) {
           .evaluate()
           .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
       
-      case 'intro': 
+      case 'intro':
         // Introduction screen - welcome message and system overview
-        return HtmlService.createTemplateFromFile('intro')
+        return HtmlService.createTemplateFromFile('Intro')
           .evaluate()
           .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
       
@@ -106,8 +106,8 @@ function doGet(e) {
           .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
       
       case 'map':
-        // Geographic map - visualizes guest locations by ZIP code
-        return HtmlService.createTemplateFromFile('map')
+        // Geographic map - visualizes guest locations by ZIP code (alias for md)
+        return HtmlService.createTemplateFromFile('MapDisplay')
           .evaluate()
           .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 
